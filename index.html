@@ -60,7 +60,7 @@ input[type=text],input[type=number]{width:100%;background:var(--bg);border:1px s
 <button class="fab" id="btnAdd">➕ Añadir gasto</button>
 
 <script>
-const KEY = 'presupuesto_v1';
+const KEY = 'presupuesto_v2';
 const fmt = n => new Intl.NumberFormat('es-ES', {style:'currency', currency:'EUR'}).format(n || 0);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -70,19 +70,25 @@ const monthIdx = k => { const [y, m] = k.split('-').map(Number); return y * 12 +
 function defaults() {
   return {
     month: monthKey(),
+    income: 765.90,
     fixed: [
-      {id: uid(), emoji: '🚗', name: 'Coche', amount: 307.09},
-      {id: uid(), emoji: '📺', name: 'Netflix', amount: 8.99},
-      {id: uid(), emoji: '🎧', name: 'Spotify', amount: 3.50},
-      {id: uid(), emoji: '🏋️', name: 'Gimnasio', amount: 45}
+      {id: uid(), emoji: '🏠', name: 'Piso', amount: 350, counted: false, paid: true},
+      {id: uid(), emoji: '📱', name: 'Digi', amount: 10, counted: false, paid: true},
+      {id: uid(), emoji: '🚗', name: 'Coche', amount: 307.09, counted: true, paid: false},
+      {id: uid(), emoji: '📺', name: 'Netflix', amount: 8.99, counted: true, paid: false},
+      {id: uid(), emoji: '🎧', name: 'Spotify', amount: 3.50, counted: true, paid: false},
+      {id: uid(), emoji: '🏋️', name: 'Gimnasio', amount: 45, counted: true, paid: false}
+    ],
+    reminders: [
+      {id: uid(), emoji: '💳', name: 'Tricount', amount: 280.30},
+      {id: uid(), emoji: '🤝', name: 'Contribución', amount: 95}
     ],
     cats: [
       {id: 'viaje', emoji: '✈️', name: 'Viaje', budget: 200, carry: true, roll: 0},
       {id: 'inversion', emoji: '📈', name: 'Inversión', budget: 60, carry: false, roll: 0},
       {id: 'concierto', emoji: '🎵', name: 'Concierto', budget: 100, carry: true, roll: 0},
       {id: 'comida', emoji: '🍔', name: 'Comida', budget: 100, carry: false, roll: 0},
-      {id: 'vida', emoji: '🥳', name: 'Vida', budget: 160, carry: false, roll: 0},
-      {id: 'tricount', emoji: '💳', name: 'Tricount', budget: 187.82, carry: false, roll: 0}
+      {id: 'vida', emoji: '🥳', name: 'Vida', budget: 160, carry: false, roll: 0}
     ],
     expenses: [],
     history: []
@@ -93,6 +99,8 @@ let S;
 function load() {
   try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
   if (!S || !S.cats) S = defaults();
+  if (!S.reminders) S.reminders = [];
+  if (S.income == null) S.income = 0;
   rollover();
   save();
 }
@@ -112,6 +120,9 @@ function rollover() {
     c.roll = Math.round(roll * 100) / 100;
   });
   S.expenses = [];
+  S.fixed = S.fixed.filter(f => !f.oneoff).map(f => ({...f, counted: true, paid: false}));
+  S.reminders.forEach(r => S.fixed.push({id: uid(), emoji: r.emoji, name: r.name, amount: r.amount, counted: true, paid: false, oneoff: true}));
+  S.reminders = [];
   S.month = now;
 }
 
@@ -123,9 +134,11 @@ const colorOf = p => p > 100 ? 'var(--bad)' : p >= 80 ? 'var(--warn)' : 'var(--o
 function render() {
   document.getElementById('monthLabel').textContent =
     new Date(S.month + '-01T12:00:00').toLocaleDateString('es-ES', {month: 'long', year: 'numeric'});
-  const fixedTotal = S.fixed.reduce((a, f) => a + f.amount, 0);
+  const fixedTotal = S.fixed.filter(f => f.counted).reduce((a, f) => a + f.amount, 0);
   const varBudget = S.cats.reduce((a, c) => a + availOf(c), 0);
   const varSpent = S.cats.reduce((a, c) => a + spentOf(c.id), 0);
+  const assigned = S.cats.reduce((a, c) => a + c.budget, 0);
+  const free = Math.round((S.income - fixedTotal - assigned) * 100) / 100;
   const left = varBudget - varSpent;
   const pct = varBudget > 0 ? Math.min(100, varSpent / varBudget * 100) : 0;
 
@@ -134,6 +147,12 @@ function render() {
     <div class="big">${fmt(left)}</div>
     <div class="bar" style="background:#ffffff33"><i style="width:${pct}%;background:#fff"></i></div>
     <div class="row"><span>Gastado ${fmt(varSpent)}</span><span>de ${fmt(varBudget)}</span></div>
+  </div>
+  <div class="card">
+    <div class="fixed"><span>💰 Dinero del mes</span><b>${fmt(S.income)}</b></div>
+    <div class="fixed"><span>🔒 Obligatorios pendientes</span><span>− ${fmt(fixedTotal)}</span></div>
+    <div class="fixed"><span>💸 Variables asignadas</span><span>− ${fmt(assigned)}</span></div>
+    <div class="fixed"><span>${free < 0 ? '⚠️ Te faltan' : '✅ Sin asignar'}</span><b style="color:${free < 0 ? 'var(--bad)' : 'var(--ok)'}">${fmt(Math.abs(free))}</b></div>
   </div>`;
 
   h += `<h2><span>Variables</span></h2>`;
@@ -148,9 +167,15 @@ function render() {
   });
 
   h += `<h2><span>🔒 Obligatorios</span><span>${fmt(fixedTotal)}</span></h2><div class="card">`;
-  h += S.fixed.map(f => `<div class="fixed"><span>${esc(f.emoji)} ${esc(f.name)}</span><span>${fmt(f.amount)}</span></div>`).join('') || '<div class="empty">Sin obligatorios</div>';
-  h += `</div>
-  <div class="meta" style="padding:0 4px"><span>Total del mes (obligatorios + variables)</span><span>${fmt(fixedTotal + S.cats.reduce((a, c) => a + c.budget, 0))}</span></div>`;
+  h += S.fixed.map(f => `<div class="fixed" data-fix="${esc(f.id)}" style="cursor:pointer"><span>${f.paid ? '✅' : '⬜'} ${esc(f.emoji)} ${esc(f.name)}${f.counted ? '' : ' <small style="color:var(--mut)">· ya pagado, no cuenta</small>'}</span><span style="${f.paid ? 'opacity:.55;text-decoration:line-through' : ''}">${fmt(f.amount)}</span></div>`).join('') || '<div class="empty">Sin obligatorios</div>';
+  h += `</div><div class="meta" style="padding:0 4px"><span>Toca uno para marcarlo como pagado</span></div>`;
+
+  if (S.reminders.length) {
+    const rt = S.reminders.reduce((a, r) => a + r.amount, 0);
+    h += `<h2><span>📌 Para el mes que viene</span><span>${fmt(rt)}</span></h2><div class="card">`;
+    h += S.reminders.map(r => `<div class="fixed"><span>${esc(r.emoji)} ${esc(r.name)}</span><span>${fmt(r.amount)}</span></div>`).join('');
+    h += `</div>`;
+  }
 
   document.getElementById('app').innerHTML = h;
 }
@@ -222,12 +247,17 @@ function catSheet(id) {
 
 function settingsSheet() {
   const o = openSheet(`<h3>Ajustes <button class="icon-btn" id="x">✕</button></h3>
-    <h2><span>🔒 Obligatorios</span></h2>
-    ${S.fixed.map(f => `<div class="set-row" data-f="${esc(f.id)}"><input type="text" value="${esc(f.name)}" data-k="name"><input type="number" step="0.01" value="${f.amount}" data-k="amount"><button class="icon-btn" data-delf="${esc(f.id)}">🗑️</button></div>`).join('')}
+    <h2><span>💰 Dinero del mes</span></h2>
+    <div class="set-row"><input type="number" step="0.01" id="income" value="${S.income}" style="flex:1"></div>
+    <h2><span>🔒 Obligatorios</span><span style="text-transform:none">cuenta ☑</span></h2>
+    ${S.fixed.map(f => `<div class="set-row" data-f="${esc(f.id)}"><input type="text" value="${esc(f.name)}" data-k="name"><input type="number" step="0.01" value="${f.amount}" data-k="amount"><label>☑<input type="checkbox" data-k="counted" ${f.counted ? 'checked' : ''}></label><button class="icon-btn" data-delf="${esc(f.id)}">🗑️</button></div>`).join('')}
     <button class="btn sec" id="addF">➕ Añadir obligatorio</button>
     <h2><span>💸 Variables</span><span style="text-transform:none">acumula ↻</span></h2>
     ${S.cats.map(c => `<div class="set-row" data-c="${esc(c.id)}"><input type="text" value="${esc(c.name)}" data-k="name"><input type="number" step="0.01" value="${c.budget}" data-k="budget"><label>↻<input type="checkbox" data-k="carry" ${c.carry ? 'checked' : ''}></label><button class="icon-btn" data-delc="${esc(c.id)}">🗑️</button></div>`).join('')}
     <button class="btn sec" id="addC">➕ Añadir categoría</button>
+    <h2><span>📌 Recordatorios mes que viene</span></h2>
+    ${S.reminders.map(r => `<div class="set-row" data-r="${esc(r.id)}"><input type="text" value="${esc(r.name)}" data-k="name"><input type="number" step="0.01" value="${r.amount}" data-k="amount"><button class="icon-btn" data-delr="${esc(r.id)}">🗑️</button></div>`).join('')}
+    <button class="btn sec" id="addR">➕ Añadir recordatorio</button>
     <h2><span>Datos</span></h2>
     <button class="btn sec" id="exp">⬇️ Exportar copia (JSON)</button>
     <button class="btn sec" id="imp">⬆️ Importar copia</button>
@@ -236,8 +266,18 @@ function settingsSheet() {
   o.querySelector('#x').onclick = () => { closeSheet(); render(); };
   o.querySelectorAll('[data-f] input').forEach(i => i.onchange = () => {
     const f = S.fixed.find(x => x.id === i.closest('[data-f]').dataset.f);
-    f[i.dataset.k] = i.dataset.k === 'amount' ? (parseFloat(i.value) || 0) : i.value; save();
+    if (i.dataset.k === 'amount') f.amount = parseFloat(i.value) || 0;
+    else if (i.dataset.k === 'counted') f.counted = i.checked;
+    else f.name = i.value;
+    save();
   });
+  o.querySelector('#income').onchange = e => { S.income = parseFloat(e.target.value) || 0; save(); };
+  o.querySelectorAll('[data-r] input').forEach(i => i.onchange = () => {
+    const r = S.reminders.find(x => x.id === i.closest('[data-r]').dataset.r);
+    if (i.dataset.k === 'amount') r.amount = parseFloat(i.value) || 0; else r.name = i.value; save();
+  });
+  o.querySelectorAll('[data-delr]').forEach(b => b.onclick = () => { S.reminders = S.reminders.filter(x => x.id !== b.dataset.delr); save(); settingsSheet(); });
+  o.querySelector('#addR').onclick = () => { S.reminders.push({id: uid(), emoji: '📌', name: 'Nuevo', amount: 0}); save(); settingsSheet(); };
   o.querySelectorAll('[data-c] input').forEach(i => i.onchange = () => {
     const c = S.cats.find(x => x.id === i.closest('[data-c]').dataset.c);
     if (i.dataset.k === 'budget') c.budget = parseFloat(i.value) || 0;
@@ -247,7 +287,7 @@ function settingsSheet() {
   });
   o.querySelectorAll('[data-delf]').forEach(b => b.onclick = () => { if (confirm('¿Quitar este obligatorio?')) { S.fixed = S.fixed.filter(x => x.id !== b.dataset.delf); save(); settingsSheet(); } });
   o.querySelectorAll('[data-delc]').forEach(b => b.onclick = () => { if (confirm('¿Quitar categoría y sus gastos del mes?')) { S.cats = S.cats.filter(x => x.id !== b.dataset.delc); S.expenses = S.expenses.filter(e => e.cat !== b.dataset.delc); save(); settingsSheet(); } });
-  o.querySelector('#addF').onclick = () => { S.fixed.push({id: uid(), emoji: '🔒', name: 'Nuevo', amount: 0}); save(); settingsSheet(); };
+  o.querySelector('#addF').onclick = () => { S.fixed.push({id: uid(), emoji: '🔒', name: 'Nuevo', amount: 0, counted: true, paid: false}); save(); settingsSheet(); };
   o.querySelector('#addC').onclick = () => { S.cats.push({id: uid(), emoji: '🏷️', name: 'Nueva', budget: 0, carry: false, roll: 0}); save(); settingsSheet(); };
   o.querySelector('#exp').onclick = () => {
     const a = document.createElement('a');
@@ -258,7 +298,7 @@ function settingsSheet() {
   o.querySelector('#file').onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     f.text().then(t => {
-      try { const d = JSON.parse(t); if (!d.cats || !d.fixed) throw 0; S = d; rollover(); save(); closeSheet(); render(); toast('Copia importada', 'var(--ok)'); }
+      try { const d = JSON.parse(t); if (!d.cats || !d.fixed) throw 0; S = d; if (!S.reminders) S.reminders = []; if (S.income == null) S.income = 0; rollover(); save(); closeSheet(); render(); toast('Copia importada', 'var(--ok)'); }
       catch (err) { alert('Archivo no válido'); }
     });
   };
@@ -268,7 +308,9 @@ function settingsSheet() {
 document.getElementById('btnAdd').onclick = () => addSheet();
 document.getElementById('btnSettings').onclick = settingsSheet;
 document.getElementById('app').addEventListener('click', e => {
-  const c = e.target.closest('[data-cat]'); if (c) catSheet(c.dataset.cat);
+  const c = e.target.closest('[data-cat]'); if (c) return catSheet(c.dataset.cat);
+  const f = e.target.closest('[data-fix]');
+  if (f) { const x = S.fixed.find(y => y.id === f.dataset.fix); if (x) { x.paid = !x.paid; save(); render(); } }
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { rollover(); save(); render(); } });
 
