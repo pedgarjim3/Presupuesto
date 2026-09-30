@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>Presupuesto</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--card2:#273449;--txt:#f1f5f9;--mut:#94a3b8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--acc:#6366f1}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.4 system-ui,-apple-system,Roboto,sans-serif;padding:0 14px calc(96px + env(safe-area-inset-bottom))}
+header{padding:calc(18px + env(safe-area-inset-top)) 2px 6px;display:flex;justify-content:space-between;align-items:center}
+h1{font-size:20px;margin:0}
+.sub{color:var(--mut);font-size:13px;text-transform:capitalize}
+.icon-btn{background:var(--card);border:0;color:var(--txt);width:42px;height:42px;border-radius:12px;font-size:20px}
+.hero{background:linear-gradient(135deg,#4f46e5,#7c3aed);border-radius:20px;padding:18px;margin:10px 0 16px}
+.hero .big{font-size:34px;font-weight:700;letter-spacing:-.5px}
+.hero .row{display:flex;justify-content:space-between;font-size:13px;opacity:.9;margin-top:6px}
+h2{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;margin:18px 2px 8px;display:flex;justify-content:space-between}
+.card{background:var(--card);border-radius:16px;padding:14px;margin-bottom:10px}
+.cat{cursor:pointer}
+.cat .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.cat .name{font-weight:600}
+.cat .left{font-weight:700}
+.bar{height:9px;background:var(--card2);border-radius:99px;margin:10px 0 6px;overflow:hidden}
+.bar>i{display:block;height:100%;border-radius:99px;transition:width .3s}
+.meta{font-size:12px;color:var(--mut);display:flex;justify-content:space-between}
+.fixed{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--card2)}
+.fixed:last-child{border:0}
+.fab{position:fixed;left:14px;right:14px;bottom:calc(14px + env(safe-area-inset-bottom));background:var(--acc);color:#fff;border:0;border-radius:16px;padding:16px;font-size:17px;font-weight:700;box-shadow:0 8px 24px #0008}
+.overlay{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-end;z-index:10}
+.sheet{background:var(--card);width:100%;max-height:92vh;overflow:auto;border-radius:22px 22px 0 0;padding:18px 16px calc(22px + env(safe-area-inset-bottom))}
+.sheet h3{margin:0 0 12px;font-size:18px;display:flex;justify-content:space-between;align-items:center}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.chip{background:var(--card2);border:2px solid transparent;color:var(--txt);border-radius:99px;padding:8px 12px;font-size:15px}
+.chip.on{border-color:var(--acc);background:#312e81}
+input[type=text],input[type=number]{width:100%;background:var(--bg);border:1px solid var(--card2);color:var(--txt);border-radius:12px;padding:13px;font-size:18px;margin-bottom:10px}
+.btn{width:100%;background:var(--acc);color:#fff;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:700;margin-top:4px}
+.btn.sec{background:var(--card2);margin-top:8px}
+.btn.danger{background:#7f1d1d}
+.exp{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--card2);gap:8px}
+.exp small{color:var(--mut);display:block}
+.exp button{background:none;border:0;color:var(--bad);font-size:18px;padding:6px}
+.set-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.set-row input[type=text]{flex:2;margin:0;font-size:15px;padding:10px}
+.set-row input[type=number]{flex:1;margin:0;font-size:15px;padding:10px}
+.set-row label{font-size:12px;color:var(--mut);display:flex;flex-direction:column;align-items:center}
+.toast{position:fixed;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;z-index:20;padding:14px;border-radius:14px;font-weight:600;text-align:center;box-shadow:0 8px 24px #0008}
+.empty{color:var(--mut);text-align:center;padding:16px}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>💰 Presupuesto</h1><div class="sub" id="monthLabel"></div></div>
+  <button class="icon-btn" id="btnSettings" aria-label="Ajustes">⚙️</button>
+</header>
+<div id="app"></div>
+<button class="fab" id="btnAdd">➕ Añadir gasto</button>
+
+<script>
+const KEY = 'presupuesto_v1';
+const fmt = n => new Intl.NumberFormat('es-ES', {style:'currency', currency:'EUR'}).format(n || 0);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const monthKey = (d = new Date()) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+const monthIdx = k => { const [y, m] = k.split('-').map(Number); return y * 12 + m; };
+
+function defaults() {
+  return {
+    month: monthKey(),
+    fixed: [
+      {id: uid(), emoji: '🚗', name: 'Coche', amount: 307.09},
+      {id: uid(), emoji: '📺', name: 'Netflix', amount: 8.99},
+      {id: uid(), emoji: '🎧', name: 'Spotify', amount: 3.50},
+      {id: uid(), emoji: '🏋️', name: 'Gimnasio', amount: 45}
+    ],
+    cats: [
+      {id: 'viaje', emoji: '✈️', name: 'Viaje', budget: 200, carry: true, roll: 0},
+      {id: 'inversion', emoji: '📈', name: 'Inversión', budget: 60, carry: false, roll: 0},
+      {id: 'concierto', emoji: '🎵', name: 'Concierto', budget: 100, carry: true, roll: 0},
+      {id: 'comida', emoji: '🍔', name: 'Comida', budget: 100, carry: false, roll: 0},
+      {id: 'vida', emoji: '🥳', name: 'Vida', budget: 160, carry: false, roll: 0},
+      {id: 'tricount', emoji: '💳', name: 'Tricount', budget: 187.82, carry: false, roll: 0}
+    ],
+    expenses: [],
+    history: []
+  };
+}
+
+let S;
+function load() {
+  try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
+  if (!S || !S.cats) S = defaults();
+  rollover();
+  save();
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+// Cambio de mes: archiva gastos y arrastra sobrantes de las categorías con "acumula"
+function rollover() {
+  const now = monthKey();
+  if (S.month === now) return;
+  let steps = monthIdx(now) - monthIdx(S.month);
+  if (steps <= 0) { S.month = now; return; }
+  S.history.push({month: S.month, expenses: S.expenses});
+  S.cats.forEach(c => {
+    const spent = S.expenses.filter(e => e.cat === c.id).reduce((a, e) => a + e.amount, 0);
+    let roll = c.carry ? (c.budget + (c.roll || 0) - spent) : 0;
+    for (let i = 1; i < steps; i++) roll = c.carry ? roll + c.budget : 0;
+    c.roll = Math.round(roll * 100) / 100;
+  });
+  S.expenses = [];
+  S.month = now;
+}
+
+const spentOf = id => S.expenses.filter(e => e.cat === id).reduce((a, e) => a + e.amount, 0);
+const availOf = c => c.budget + (c.roll || 0);
+const pctOf = c => { const a = availOf(c); return a > 0 ? spentOf(c.id) / a * 100 : (spentOf(c.id) > 0 ? 101 : 0); };
+const colorOf = p => p > 100 ? 'var(--bad)' : p >= 80 ? 'var(--warn)' : 'var(--ok)';
+
+function render() {
+  document.getElementById('monthLabel').textContent =
+    new Date(S.month + '-01T12:00:00').toLocaleDateString('es-ES', {month: 'long', year: 'numeric'});
+  const fixedTotal = S.fixed.reduce((a, f) => a + f.amount, 0);
+  const varBudget = S.cats.reduce((a, c) => a + availOf(c), 0);
+  const varSpent = S.cats.reduce((a, c) => a + spentOf(c.id), 0);
+  const left = varBudget - varSpent;
+  const pct = varBudget > 0 ? Math.min(100, varSpent / varBudget * 100) : 0;
+
+  let h = `<div class="hero">
+    <div style="font-size:13px;opacity:.85">Te queda para variables</div>
+    <div class="big">${fmt(left)}</div>
+    <div class="bar" style="background:#ffffff33"><i style="width:${pct}%;background:#fff"></i></div>
+    <div class="row"><span>Gastado ${fmt(varSpent)}</span><span>de ${fmt(varBudget)}</span></div>
+  </div>`;
+
+  h += `<h2><span>Variables</span></h2>`;
+  S.cats.forEach(c => {
+    const sp = spentOf(c.id), av = availOf(c), p = pctOf(c), rest = av - sp;
+    h += `<div class="card cat" data-cat="${esc(c.id)}">
+      <div class="top"><span class="name">${esc(c.emoji)} ${esc(c.name)}</span>
+      <span class="left" style="color:${colorOf(p)}">${rest < 0 ? '−' : ''}${fmt(Math.abs(rest))}</span></div>
+      <div class="bar"><i style="width:${Math.min(100, p)}%;background:${colorOf(p)}"></i></div>
+      <div class="meta"><span>${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}</span><span>${Math.round(p)}%</span></div>
+    </div>`;
+  });
+
+  h += `<h2><span>🔒 Obligatorios</span><span>${fmt(fixedTotal)}</span></h2><div class="card">`;
+  h += S.fixed.map(f => `<div class="fixed"><span>${esc(f.emoji)} ${esc(f.name)}</span><span>${fmt(f.amount)}</span></div>`).join('') || '<div class="empty">Sin obligatorios</div>';
+  h += `</div>
+  <div class="meta" style="padding:0 4px"><span>Total del mes (obligatorios + variables)</span><span>${fmt(fixedTotal + S.cats.reduce((a, c) => a + c.budget, 0))}</span></div>`;
+
+  document.getElementById('app').innerHTML = h;
+}
+
+// ---------- Hojas (modales) ----------
+function openSheet(html) {
+  closeSheet();
+  const o = document.createElement('div');
+  o.className = 'overlay'; o.id = 'overlay';
+  o.innerHTML = `<div class="sheet">${html}</div>`;
+  o.addEventListener('click', e => { if (e.target === o) closeSheet(); });
+  document.body.appendChild(o);
+  return o;
+}
+function closeSheet() { const o = document.getElementById('overlay'); if (o) o.remove(); }
+
+function toast(msg, color) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.style.background = color; t.style.color = '#0f172a'; t.textContent = msg;
+  document.body.appendChild(t);
+  if (navigator.vibrate) navigator.vibrate(color === 'var(--bad)' ? [200, 100, 200] : 120);
+  setTimeout(() => t.remove(), 3500);
+}
+
+function addSheet(preCat) {
+  let sel = preCat || S.cats[0]?.id;
+  const o = openSheet(`<h3>Añadir gasto <button class="icon-btn" id="x">✕</button></h3>
+    <div class="chips">${S.cats.map(c => `<button class="chip ${c.id === sel ? 'on' : ''}" data-id="${esc(c.id)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('')}</div>
+    <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)">
+    <input type="text" id="note" placeholder="Nota (opcional)">
+    <button class="btn" id="ok">Guardar gasto</button>`);
+  o.querySelector('#x').onclick = closeSheet;
+  o.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    sel = b.dataset.id;
+    o.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b));
+  });
+  o.querySelector('#ok').onclick = () => {
+    const amount = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+    if (!sel || !(amount > 0)) { o.querySelector('#amt').focus(); return; }
+    const cat = S.cats.find(c => c.id === sel);
+    const before = pctOf(cat);
+    S.expenses.push({id: uid(), cat: sel, amount: Math.round(amount * 100) / 100, note: o.querySelector('#note').value.trim(), ts: Date.now()});
+    save(); closeSheet(); render();
+    const after = pctOf(cat);
+    const rest = availOf(cat) - spentOf(cat.id);
+    if (before <= 100 && after > 100) toast(`🔴 Te has pasado en ${cat.name} por ${fmt(-rest)}`, 'var(--bad)');
+    else if (before < 90 && after >= 90 && after <= 100) toast(`🟠 ${cat.name}: ya llevas el 90% (quedan ${fmt(rest)})`, 'var(--warn)');
+    else if (before < 80 && after >= 80 && after <= 100) toast(`🟠 ${cat.name}: ya llevas el 80% (quedan ${fmt(rest)})`, 'var(--warn)');
+    else toast(`✅ ${cat.name}: quedan ${fmt(rest)}`, 'var(--ok)');
+  };
+  setTimeout(() => o.querySelector('#amt').focus(), 150);
+}
+
+function catSheet(id) {
+  const c = S.cats.find(x => x.id === id); if (!c) return;
+  const list = S.expenses.filter(e => e.cat === id).sort((a, b) => b.ts - a.ts);
+  const o = openSheet(`<h3>${esc(c.emoji)} ${esc(c.name)} <button class="icon-btn" id="x">✕</button></h3>
+    <div class="meta" style="margin-bottom:8px"><span>Gastado ${fmt(spentOf(id))}</span><span>Quedan ${fmt(availOf(c) - spentOf(id))}</span></div>
+    ${list.length ? list.map(e => `<div class="exp"><div>${fmt(e.amount)}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}</small></div><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div>`).join('') : '<div class="empty">Aún no hay gastos este mes</div>'}
+    <button class="btn" id="add">➕ Añadir gasto aquí</button>`);
+  o.querySelector('#x').onclick = closeSheet;
+  o.querySelector('#add').onclick = () => addSheet(id);
+  o.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    if (!confirm('¿Borrar este gasto?')) return;
+    S.expenses = S.expenses.filter(e => e.id !== b.dataset.del);
+    save(); render(); catSheet(id);
+  });
+}
+
+function settingsSheet() {
+  const o = openSheet(`<h3>Ajustes <button class="icon-btn" id="x">✕</button></h3>
+    <h2><span>🔒 Obligatorios</span></h2>
+    ${S.fixed.map(f => `<div class="set-row" data-f="${esc(f.id)}"><input type="text" value="${esc(f.name)}" data-k="name"><input type="number" step="0.01" value="${f.amount}" data-k="amount"><button class="icon-btn" data-delf="${esc(f.id)}">🗑️</button></div>`).join('')}
+    <button class="btn sec" id="addF">➕ Añadir obligatorio</button>
+    <h2><span>💸 Variables</span><span style="text-transform:none">acumula ↻</span></h2>
+    ${S.cats.map(c => `<div class="set-row" data-c="${esc(c.id)}"><input type="text" value="${esc(c.name)}" data-k="name"><input type="number" step="0.01" value="${c.budget}" data-k="budget"><label>↻<input type="checkbox" data-k="carry" ${c.carry ? 'checked' : ''}></label><button class="icon-btn" data-delc="${esc(c.id)}">🗑️</button></div>`).join('')}
+    <button class="btn sec" id="addC">➕ Añadir categoría</button>
+    <h2><span>Datos</span></h2>
+    <button class="btn sec" id="exp">⬇️ Exportar copia (JSON)</button>
+    <button class="btn sec" id="imp">⬆️ Importar copia</button>
+    <button class="btn danger" id="rst">Vaciar gastos del mes</button>
+    <input type="file" id="file" accept="application/json" hidden>`);
+  o.querySelector('#x').onclick = () => { closeSheet(); render(); };
+  o.querySelectorAll('[data-f] input').forEach(i => i.onchange = () => {
+    const f = S.fixed.find(x => x.id === i.closest('[data-f]').dataset.f);
+    f[i.dataset.k] = i.dataset.k === 'amount' ? (parseFloat(i.value) || 0) : i.value; save();
+  });
+  o.querySelectorAll('[data-c] input').forEach(i => i.onchange = () => {
+    const c = S.cats.find(x => x.id === i.closest('[data-c]').dataset.c);
+    if (i.dataset.k === 'budget') c.budget = parseFloat(i.value) || 0;
+    else if (i.dataset.k === 'carry') c.carry = i.checked;
+    else c.name = i.value;
+    save();
+  });
+  o.querySelectorAll('[data-delf]').forEach(b => b.onclick = () => { if (confirm('¿Quitar este obligatorio?')) { S.fixed = S.fixed.filter(x => x.id !== b.dataset.delf); save(); settingsSheet(); } });
+  o.querySelectorAll('[data-delc]').forEach(b => b.onclick = () => { if (confirm('¿Quitar categoría y sus gastos del mes?')) { S.cats = S.cats.filter(x => x.id !== b.dataset.delc); S.expenses = S.expenses.filter(e => e.cat !== b.dataset.delc); save(); settingsSheet(); } });
+  o.querySelector('#addF').onclick = () => { S.fixed.push({id: uid(), emoji: '🔒', name: 'Nuevo', amount: 0}); save(); settingsSheet(); };
+  o.querySelector('#addC').onclick = () => { S.cats.push({id: uid(), emoji: '🏷️', name: 'Nueva', budget: 0, carry: false, roll: 0}); save(); settingsSheet(); };
+  o.querySelector('#exp').onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 2)], {type: 'application/json'}));
+    a.download = 'presupuesto-' + S.month + '.json'; a.click();
+  };
+  o.querySelector('#imp').onclick = () => o.querySelector('#file').click();
+  o.querySelector('#file').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    f.text().then(t => {
+      try { const d = JSON.parse(t); if (!d.cats || !d.fixed) throw 0; S = d; rollover(); save(); closeSheet(); render(); toast('Copia importada', 'var(--ok)'); }
+      catch (err) { alert('Archivo no válido'); }
+    });
+  };
+  o.querySelector('#rst').onclick = () => { if (confirm('¿Borrar todos los gastos de este mes?')) { S.expenses = []; save(); closeSheet(); render(); } };
+}
+
+document.getElementById('btnAdd').onclick = () => addSheet();
+document.getElementById('btnSettings').onclick = settingsSheet;
+document.getElementById('app').addEventListener('click', e => {
+  const c = e.target.closest('[data-cat]'); if (c) catSheet(c.dataset.cat);
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { rollover(); save(); render(); } });
+
+load(); render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
