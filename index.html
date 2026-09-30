@@ -60,7 +60,7 @@ input[type=text],input[type=number]{width:100%;background:var(--bg);border:1px s
 <button class="fab" id="btnAdd">➕ Añadir gasto</button>
 
 <script>
-const KEY = 'presupuesto_v2';
+const KEY = 'presupuesto_v3';
 const fmt = n => new Intl.NumberFormat('es-ES', {style:'currency', currency:'EUR'}).format(n || 0);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -69,8 +69,8 @@ const monthIdx = k => { const [y, m] = k.split('-').map(Number); return y * 12 +
 
 function defaults() {
   return {
-    month: monthKey(),
-    income: 765.90,
+    month: '2026-10',
+    income: 984.58,
     fixed: [
       {id: uid(), emoji: '🏠', name: 'Piso', amount: 350, counted: false, paid: true},
       {id: uid(), emoji: '📱', name: 'Digi', amount: 10, counted: false, paid: true},
@@ -90,7 +90,11 @@ function defaults() {
       {id: 'comida', emoji: '🍔', name: 'Comida', budget: 100, carry: false, roll: 0},
       {id: 'vida', emoji: '🥳', name: 'Vida', budget: 160, carry: false, roll: 0}
     ],
-    expenses: [],
+    expenses: [
+      {id: uid(), cat: 'comida', amount: 51.51, note: 'mitad del Tricount', ts: Date.now()},
+      {id: uid(), cat: 'vida', amount: 6, note: '', ts: Date.now()},
+      {id: uid(), cat: 'vida', amount: 11.17, note: '', ts: Date.now()}
+    ],
     history: []
   };
 }
@@ -111,7 +115,7 @@ function rollover() {
   const now = monthKey();
   if (S.month === now) return;
   let steps = monthIdx(now) - monthIdx(S.month);
-  if (steps <= 0) { S.month = now; return; }
+  if (steps <= 0) return;
   S.history.push({month: S.month, expenses: S.expenses});
   S.cats.forEach(c => {
     const spent = S.expenses.filter(e => e.cat === c.id).reduce((a, e) => a + e.amount, 0);
