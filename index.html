@@ -49,6 +49,9 @@ input[type=text],input[type=number]{width:100%;background:var(--bg);border:1px s
 .set-row label{font-size:12px;color:var(--mut);display:flex;flex-direction:column;align-items:center}
 .toast{position:fixed;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;z-index:20;padding:14px;border-radius:14px;font-weight:600;text-align:center;box-shadow:0 8px 24px #0008}
 .empty{color:var(--mut);text-align:center;padding:16px}
+.share{display:flex;align-items:center;gap:10px;background:var(--card2);border-radius:12px;padding:12px;margin-bottom:10px;font-size:15px}
+.share input{width:22px;height:22px;flex:none}
+.share small{display:block;color:var(--mut);font-size:12px}
 </style>
 </head>
 <body>
@@ -79,19 +82,19 @@ function defaults() {
       {id: uid(), emoji: '🎧', name: 'Spotify', amount: 3.50, counted: true, paid: false},
       {id: uid(), emoji: '🏋️', name: 'Gimnasio', amount: 45, counted: true, paid: false}
     ],
+    tricount: {base: 306.06},
     reminders: [
-      {id: uid(), emoji: '💳', name: 'Tricount', amount: 280.30},
       {id: uid(), emoji: '🤝', name: 'Contribución', amount: 95}
     ],
     cats: [
       {id: 'viaje', emoji: '✈️', name: 'Viaje', budget: 200, carry: true, roll: 0},
-      {id: 'inversion', emoji: '📈', name: 'Inversión', budget: 60, carry: false, roll: 0},
+      {id: 'inversion', emoji: '📈', name: 'Inversión', budget: 60, carry: false, roll: 0, tracker: true},
       {id: 'concierto', emoji: '🎵', name: 'Concierto', budget: 100, carry: true, roll: 0},
       {id: 'comida', emoji: '🍔', name: 'Comida', budget: 100, carry: false, roll: 0},
       {id: 'vida', emoji: '🥳', name: 'Vida', budget: 160, carry: false, roll: 0}
     ],
     expenses: [
-      {id: uid(), cat: 'comida', amount: 51.51, note: 'mitad del Tricount', ts: Date.now()},
+      {id: uid(), cat: 'comida', amount: 51.51, note: 'compartido', shared: true, ts: Date.now()},
       {id: uid(), cat: 'vida', amount: 6, note: '', ts: Date.now()},
       {id: uid(), cat: 'vida', amount: 11.17, note: '', ts: Date.now()}
     ],
@@ -103,10 +106,26 @@ let S;
 function load() {
   try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
   if (!S || !S.cats) S = defaults();
-  if (!S.reminders) S.reminders = [];
-  if (S.income == null) S.income = 0;
+  normalize();
   rollover();
   save();
+}
+// Migra datos de versiones anteriores sin perder nada
+function normalize() {
+  if (!S.reminders) S.reminders = [];
+  if (S.income == null) S.income = 0;
+  if (!S.tricount) {
+    S.tricount = {base: 0};
+    const tr = S.reminders.find(r => /tricount/i.test(r.name));
+    if (tr) {
+      S.reminders = S.reminders.filter(r => r !== tr);
+      const sh = S.expenses.find(e => e.cat === 'comida' && e.amount === 51.51 && !e.shared);
+      if (sh) { sh.shared = true; S.tricount.base = Math.round((tr.amount + half(sh.amount)) * 100) / 100; }
+      else S.tricount.base = tr.amount;
+    }
+  }
+  const inv = S.cats.find(c => c.id === 'inversion');
+  if (inv && inv.tracker == null) inv.tracker = true;
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
@@ -118,19 +137,27 @@ function rollover() {
   if (steps <= 0) return;
   S.history.push({month: S.month, expenses: S.expenses});
   S.cats.forEach(c => {
-    const spent = S.expenses.filter(e => e.cat === c.id).reduce((a, e) => a + e.amount, 0);
+    const spent = S.expenses.filter(e => e.cat === c.id && e.kind !== 'out').reduce((a, e) => a + e.amount, 0);
     let roll = c.carry ? (c.budget + (c.roll || 0) - spent) : 0;
     for (let i = 1; i < steps; i++) roll = c.carry ? roll + c.budget : 0;
     c.roll = Math.round(roll * 100) / 100;
   });
+  const tDebt = tricountDebt();
   S.expenses = [];
   S.fixed = S.fixed.filter(f => !f.oneoff).map(f => ({...f, counted: true, paid: false}));
   S.reminders.forEach(r => S.fixed.push({id: uid(), emoji: r.emoji, name: r.name, amount: r.amount, counted: true, paid: false, oneoff: true}));
   S.reminders = [];
+  if (tDebt > 0) S.fixed.push({id: uid(), emoji: '💳', name: 'Tricount', amount: tDebt, counted: true, paid: false, oneoff: true});
+  S.tricount.base = Math.min(0, tDebt);
   S.month = now;
 }
 
-const spentOf = id => S.expenses.filter(e => e.cat === id).reduce((a, e) => a + e.amount, 0);
+const half = a => Math.round(a * 50 + 1e-6) / 100;
+const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt(Math.abs(n));
+const spentOf = id => S.expenses.filter(e => e.cat === id && e.kind !== 'out').reduce((a, e) => a + e.amount, 0);
+const winsOf = id => S.expenses.filter(e => e.cat === id && e.kind === 'out').reduce((a, e) => a + e.amount, 0);
+const sharedOffset = () => Math.round(S.expenses.filter(e => e.shared).reduce((a, e) => a + half(e.amount), 0) * 100) / 100;
+const tricountDebt = () => Math.round((S.tricount.base - sharedOffset()) * 100) / 100;
 const availOf = c => c.budget + (c.roll || 0);
 const pctOf = c => { const a = availOf(c); return a > 0 ? spentOf(c.id) / a * 100 : (spentOf(c.id) > 0 ? 101 : 0); };
 const colorOf = p => p > 100 ? 'var(--bad)' : p >= 80 ? 'var(--warn)' : 'var(--ok)';
@@ -162,11 +189,13 @@ function render() {
   h += `<h2><span>Variables</span></h2>`;
   S.cats.forEach(c => {
     const sp = spentOf(c.id), av = availOf(c), p = pctOf(c), rest = av - sp;
+    const wins = winsOf(c.id), bal = Math.round((wins - sp) * 100) / 100;
     h += `<div class="card cat" data-cat="${esc(c.id)}">
       <div class="top"><span class="name">${esc(c.emoji)} ${esc(c.name)}</span>
       <span class="left" style="color:${colorOf(p)}">${rest < 0 ? '−' : ''}${fmt(Math.abs(rest))}</span></div>
       <div class="bar"><i style="width:${Math.min(100, p)}%;background:${colorOf(p)}"></i></div>
       <div class="meta"><span>${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}</span><span>${Math.round(p)}%</span></div>
+      ${c.tracker && (sp || wins) ? `<div class="meta" style="margin-top:6px"><span>Metido ${fmt(sp)} · Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
     </div>`;
   });
 
@@ -174,9 +203,12 @@ function render() {
   h += S.fixed.map(f => `<div class="fixed" data-fix="${esc(f.id)}" style="cursor:pointer"><span>${f.paid ? '✅' : '⬜'} ${esc(f.emoji)} ${esc(f.name)}${f.counted ? '' : ' <small style="color:var(--mut)">· ya pagado, no cuenta</small>'}</span><span style="${f.paid ? 'opacity:.55;text-decoration:line-through' : ''}">${fmt(f.amount)}</span></div>`).join('') || '<div class="empty">Sin obligatorios</div>';
   h += `</div><div class="meta" style="padding:0 4px"><span>Toca uno para marcarlo como pagado</span></div>`;
 
-  if (S.reminders.length) {
-    const rt = S.reminders.reduce((a, r) => a + r.amount, 0);
+  const debt = tricountDebt(), off = sharedOffset();
+  if (S.reminders.length || S.tricount.base || off) {
+    const rt = S.reminders.reduce((a, r) => a + r.amount, 0) + Math.max(0, debt);
     h += `<h2><span>📌 Para el mes que viene</span><span>${fmt(rt)}</span></h2><div class="card">`;
+    h += `<div class="fixed"><span>💳 Tricount <small style="color:var(--mut)">· deuda con tu pareja</small></span><b style="color:${debt < 0 ? 'var(--ok)' : 'inherit'}">${debt < 0 ? 'Te deben ' + fmt(-debt) : fmt(debt)}</b></div>`;
+    if (off) h += `<div class="meta" style="padding:2px 0 8px"><span>Descontado por gastos compartidos: ${fmt(off)} (de ${fmt(S.tricount.base)})</span></div>`;
     h += S.reminders.map(r => `<div class="fixed"><span>${esc(r.emoji)} ${esc(r.name)}</span><span>${fmt(r.amount)}</span></div>`).join('');
     h += `</div>`;
   }
@@ -204,31 +236,66 @@ function toast(msg, color) {
   setTimeout(() => t.remove(), 3500);
 }
 
-function addSheet(preCat) {
+function addSheet(preCat, preKind) {
   let sel = preCat || S.cats[0]?.id;
+  let kind = preKind || 'in';
   const o = openSheet(`<h3>Añadir gasto <button class="icon-btn" id="x">✕</button></h3>
     <div class="chips">${S.cats.map(c => `<button class="chip ${c.id === sel ? 'on' : ''}" data-id="${esc(c.id)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('')}</div>
+    <div class="chips" id="kindRow" style="display:none">
+      <button class="chip" data-kind="in">💸 Meto</button>
+      <button class="chip" data-kind="out">🏆 Gano</button>
+    </div>
     <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)">
     <input type="text" id="note" placeholder="Nota (opcional)">
+    <label class="share" id="shRow"><input type="checkbox" id="sh"><span>👥 Compartido con mi pareja<small id="shInfo">Resta la mitad de lo que debes del Tricount</small></span></label>
     <button class="btn" id="ok">Guardar gasto</button>`);
+  const refresh = () => {
+    const cat = S.cats.find(c => c.id === sel);
+    const tr = !!(cat && cat.tracker);
+    o.querySelector('#kindRow').style.display = tr ? 'flex' : 'none';
+    o.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === kind));
+    o.querySelector('#shRow').style.display = tr ? 'none' : 'flex';
+    const out = tr && kind === 'out';
+    o.querySelector('#amt').placeholder = out ? 'Importe ganado / retirado (€)' : 'Importe (€)';
+    o.querySelector('#ok').textContent = out ? 'Guardar ganancia' : (tr ? 'Guardar lo que meto' : 'Guardar gasto');
+    const a = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+    o.querySelector('#shInfo').textContent = o.querySelector('#sh').checked && a > 0
+      ? 'Se descontarán ' + fmt(half(a)) + ' del Tricount'
+      : 'Resta la mitad de lo que debes del Tricount';
+  };
   o.querySelector('#x').onclick = closeSheet;
-  o.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+  o.querySelectorAll('.chip[data-id]').forEach(b => b.onclick = () => {
     sel = b.dataset.id;
-    o.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b));
+    o.querySelectorAll('.chip[data-id]').forEach(x => x.classList.toggle('on', x === b));
+    refresh();
   });
+  o.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { kind = b.dataset.kind; refresh(); });
+  o.querySelector('#sh').onchange = refresh;
+  o.querySelector('#amt').oninput = refresh;
+  refresh();
   o.querySelector('#ok').onclick = () => {
     const amount = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
     if (!sel || !(amount > 0)) { o.querySelector('#amt').focus(); return; }
     const cat = S.cats.find(c => c.id === sel);
+    const isOut = !!cat.tracker && kind === 'out';
+    const shared = !cat.tracker && o.querySelector('#sh').checked;
     const before = pctOf(cat);
-    S.expenses.push({id: uid(), cat: sel, amount: Math.round(amount * 100) / 100, note: o.querySelector('#note').value.trim(), ts: Date.now()});
+    const exp = {id: uid(), cat: sel, amount: Math.round(amount * 100) / 100, note: o.querySelector('#note').value.trim(), ts: Date.now()};
+    if (isOut) exp.kind = 'out';
+    if (shared) exp.shared = true;
+    S.expenses.push(exp);
     save(); closeSheet(); render();
+    if (isOut) {
+      const bal = Math.round((winsOf(cat.id) - spentOf(cat.id)) * 100) / 100;
+      return toast(`🏆 ${cat.name}: +${fmt(exp.amount)}. Balance del mes ${sgn(bal)}`, 'var(--ok)');
+    }
     const after = pctOf(cat);
     const rest = availOf(cat) - spentOf(cat.id);
-    if (before <= 100 && after > 100) toast(`🔴 Te has pasado en ${cat.name} por ${fmt(-rest)}`, 'var(--bad)');
-    else if (before < 90 && after >= 90 && after <= 100) toast(`🟠 ${cat.name}: ya llevas el 90% (quedan ${fmt(rest)})`, 'var(--warn)');
-    else if (before < 80 && after >= 80 && after <= 100) toast(`🟠 ${cat.name}: ya llevas el 80% (quedan ${fmt(rest)})`, 'var(--warn)');
-    else toast(`✅ ${cat.name}: quedan ${fmt(rest)}`, 'var(--ok)');
+    const extra = shared ? ` · Tricount −${fmt(half(exp.amount))}` : '';
+    if (before <= 100 && after > 100) toast(`🔴 Te has pasado en ${cat.name} por ${fmt(-rest)}${extra}`, 'var(--bad)');
+    else if (before < 90 && after >= 90 && after <= 100) toast(`🟠 ${cat.name}: ya llevas el 90% (quedan ${fmt(rest)})${extra}`, 'var(--warn)');
+    else if (before < 80 && after >= 80 && after <= 100) toast(`🟠 ${cat.name}: ya llevas el 80% (quedan ${fmt(rest)})${extra}`, 'var(--warn)');
+    else toast(`✅ ${cat.name}: quedan ${fmt(rest)}${extra}`, 'var(--ok)');
   };
   setTimeout(() => o.querySelector('#amt').focus(), 150);
 }
@@ -236,14 +303,19 @@ function addSheet(preCat) {
 function catSheet(id) {
   const c = S.cats.find(x => x.id === id); if (!c) return;
   const list = S.expenses.filter(e => e.cat === id).sort((a, b) => b.ts - a.ts);
+  const wins = winsOf(id), sp = spentOf(id), bal = Math.round((wins - sp) * 100) / 100;
   const o = openSheet(`<h3>${esc(c.emoji)} ${esc(c.name)} <button class="icon-btn" id="x">✕</button></h3>
-    <div class="meta" style="margin-bottom:8px"><span>Gastado ${fmt(spentOf(id))}</span><span>Quedan ${fmt(availOf(c) - spentOf(id))}</span></div>
-    ${list.length ? list.map(e => `<div class="exp"><div>${fmt(e.amount)}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}</small></div><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div>`).join('') : '<div class="empty">Aún no hay gastos este mes</div>'}
-    <button class="btn" id="add">➕ Añadir gasto aquí</button>`);
+    <div class="meta" style="margin-bottom:${c.tracker ? 4 : 8}px"><span>${c.tracker ? 'Metido' : 'Gastado'} ${fmt(sp)}</span><span>Quedan ${fmt(availOf(c) - sp)}</span></div>
+    ${c.tracker ? `<div class="meta" style="margin-bottom:8px"><span>Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
+    ${list.length ? list.map(e => { const out = e.kind === 'out'; return `<div class="exp"><div><span style="color:${out ? 'var(--ok)' : 'inherit'}">${out ? '+' : ''}${fmt(e.amount)}${out ? ' ganado' : (c.tracker ? ' metido' : '')}</span>${e.shared ? ' 👥' : ''}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}${e.shared ? ' · Tricount −' + fmt(half(e.amount)) : ''}</small></div><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div>`; }).join('') : '<div class="empty">Aún no hay movimientos este mes</div>'}
+    ${c.tracker ? `<button class="btn" id="addIn">💸 Meto dinero</button><button class="btn sec" id="addOut">🏆 Gano / retiro</button>` : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
   o.querySelector('#x').onclick = closeSheet;
-  o.querySelector('#add').onclick = () => addSheet(id);
+  if (c.tracker) {
+    o.querySelector('#addIn').onclick = () => addSheet(id, 'in');
+    o.querySelector('#addOut').onclick = () => addSheet(id, 'out');
+  } else o.querySelector('#add').onclick = () => addSheet(id);
   o.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
-    if (!confirm('¿Borrar este gasto?')) return;
+    if (!confirm('¿Borrar este movimiento?')) return;
     S.expenses = S.expenses.filter(e => e.id !== b.dataset.del);
     save(); render(); catSheet(id);
   });
@@ -256,9 +328,12 @@ function settingsSheet() {
     <h2><span>🔒 Obligatorios</span><span style="text-transform:none">cuenta ☑</span></h2>
     ${S.fixed.map(f => `<div class="set-row" data-f="${esc(f.id)}"><input type="text" value="${esc(f.name)}" data-k="name"><input type="number" step="0.01" value="${f.amount}" data-k="amount"><label>☑<input type="checkbox" data-k="counted" ${f.counted ? 'checked' : ''}></label><button class="icon-btn" data-delf="${esc(f.id)}">🗑️</button></div>`).join('')}
     <button class="btn sec" id="addF">➕ Añadir obligatorio</button>
-    <h2><span>💸 Variables</span><span style="text-transform:none">acumula ↻</span></h2>
-    ${S.cats.map(c => `<div class="set-row" data-c="${esc(c.id)}"><input type="text" value="${esc(c.name)}" data-k="name"><input type="number" step="0.01" value="${c.budget}" data-k="budget"><label>↻<input type="checkbox" data-k="carry" ${c.carry ? 'checked' : ''}></label><button class="icon-btn" data-delc="${esc(c.id)}">🗑️</button></div>`).join('')}
+    <h2><span>💸 Variables</span><span style="text-transform:none">acumula ↻ · juego 🎰</span></h2>
+    ${S.cats.map(c => `<div class="set-row" data-c="${esc(c.id)}"><input type="text" value="${esc(c.name)}" data-k="name"><input type="number" step="0.01" value="${c.budget}" data-k="budget"><label>↻<input type="checkbox" data-k="carry" ${c.carry ? 'checked' : ''}></label><label>🎰<input type="checkbox" data-k="tracker" ${c.tracker ? 'checked' : ''}></label><button class="icon-btn" data-delc="${esc(c.id)}">🗑️</button></div>`).join('')}
     <button class="btn sec" id="addC">➕ Añadir categoría</button>
+    <h2><span>💳 Tricount (lo que debo a mi pareja)</span></h2>
+    <div class="set-row"><input type="number" step="0.01" id="trbase" value="${S.tricount.base}" style="flex:1"></div>
+    <div class="meta" style="margin:-2px 2px 8px"><span>Ahora debes ${fmt(tricountDebt())} (descontados ${fmt(sharedOffset())} de gastos compartidos)</span></div>
     <h2><span>📌 Recordatorios mes que viene</span></h2>
     ${S.reminders.map(r => `<div class="set-row" data-r="${esc(r.id)}"><input type="text" value="${esc(r.name)}" data-k="name"><input type="number" step="0.01" value="${r.amount}" data-k="amount"><button class="icon-btn" data-delr="${esc(r.id)}">🗑️</button></div>`).join('')}
     <button class="btn sec" id="addR">➕ Añadir recordatorio</button>
@@ -276,6 +351,7 @@ function settingsSheet() {
     save();
   });
   o.querySelector('#income').onchange = e => { S.income = parseFloat(e.target.value) || 0; save(); };
+  o.querySelector('#trbase').onchange = e => { S.tricount.base = parseFloat(e.target.value) || 0; save(); settingsSheet(); };
   o.querySelectorAll('[data-r] input').forEach(i => i.onchange = () => {
     const r = S.reminders.find(x => x.id === i.closest('[data-r]').dataset.r);
     if (i.dataset.k === 'amount') r.amount = parseFloat(i.value) || 0; else r.name = i.value; save();
@@ -286,6 +362,7 @@ function settingsSheet() {
     const c = S.cats.find(x => x.id === i.closest('[data-c]').dataset.c);
     if (i.dataset.k === 'budget') c.budget = parseFloat(i.value) || 0;
     else if (i.dataset.k === 'carry') c.carry = i.checked;
+    else if (i.dataset.k === 'tracker') c.tracker = i.checked;
     else c.name = i.value;
     save();
   });
@@ -302,7 +379,7 @@ function settingsSheet() {
   o.querySelector('#file').onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     f.text().then(t => {
-      try { const d = JSON.parse(t); if (!d.cats || !d.fixed) throw 0; S = d; if (!S.reminders) S.reminders = []; if (S.income == null) S.income = 0; rollover(); save(); closeSheet(); render(); toast('Copia importada', 'var(--ok)'); }
+      try { const d = JSON.parse(t); if (!d.cats || !d.fixed) throw 0; S = d; normalize(); rollover(); save(); closeSheet(); render(); toast('Copia importada', 'var(--ok)'); }
       catch (err) { alert('Archivo no válido'); }
     });
   };
