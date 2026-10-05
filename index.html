@@ -36,7 +36,7 @@ h2{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
 .chip{background:var(--card2);border:2px solid transparent;color:var(--txt);border-radius:99px;padding:8px 12px;font-size:15px}
 .chip.on{border-color:var(--acc);background:#312e81}
-input[type=text],input[type=number]{width:100%;background:var(--bg);border:1px solid var(--card2);color:var(--txt);border-radius:12px;padding:13px;font-size:18px;margin-bottom:10px}
+input[type=text],input[type=number],input[type=date]{width:100%;background:var(--bg);border:1px solid var(--card2);color:var(--txt);border-radius:12px;padding:13px;font-size:18px;margin-bottom:10px}
 .btn{width:100%;background:var(--acc);color:#fff;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:700;margin-top:4px}
 .btn.sec{background:var(--card2);margin-top:8px}
 .btn.danger{background:#7f1d1d}
@@ -98,7 +98,8 @@ function defaults() {
       {id: uid(), cat: 'vida', amount: 6, note: '', ts: Date.now()},
       {id: uid(), cat: 'vida', amount: 11.17, note: '', ts: Date.now()}
     ],
-    history: []
+    history: [],
+    debts: []
   };
 }
 
@@ -124,6 +125,8 @@ function normalize() {
       else S.tricount.base = tr.amount;
     }
   }
+  if (!Array.isArray(S.debts)) S.debts = [];
+  S.debts.forEach(d => { if (!Array.isArray(d.payments)) d.payments = []; });
   const inv = S.cats.find(c => c.id === 'inversion');
   if (inv && inv.tracker == null) inv.tracker = true;
 }
@@ -137,7 +140,7 @@ function rollover() {
   if (steps <= 0) return;
   S.history.push({month: S.month, expenses: S.expenses});
   S.cats.forEach(c => {
-    const spent = S.expenses.filter(e => e.cat === c.id && e.kind !== 'out').reduce((a, e) => a + e.amount, 0);
+    const spent = spentOf(c.id);
     let roll = c.carry ? (c.budget + (c.roll || 0) - spent) : 0;
     for (let i = 1; i < steps; i++) roll = c.carry ? roll + c.budget : 0;
     c.roll = Math.round(roll * 100) / 100;
@@ -154,8 +157,26 @@ function rollover() {
 
 const half = a => Math.round(a * 50 + 1e-6) / 100;
 const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt(Math.abs(n));
-const spentOf = id => S.expenses.filter(e => e.cat === id && e.kind !== 'out').reduce((a, e) => a + e.amount, 0);
+const rawInOf = id => S.expenses.filter(e => e.cat === id && e.kind !== 'out').reduce((a, e) => a + e.amount, 0);
 const winsOf = id => S.expenses.filter(e => e.cat === id && e.kind === 'out').reduce((a, e) => a + e.amount, 0);
+// Gasto de una categoría. En las de juego/inversión solo cuenta la pérdida neta (metido − ganado, mínimo 0)
+const spentOf = id => {
+  const c = S.cats.find(x => x.id === id), r = rawInOf(id);
+  return c && c.tracker ? Math.max(0, Math.round((r - winsOf(id)) * 100) / 100) : r;
+};
+// Bloqueo: pérdida neta ha llegado al límite de la categoría
+const invBlocked = c => !!c.tracker && spentOf(c.id) >= availOf(c) - 0.005;
+// Deudas
+const rd = n => Math.round(n * 100) / 100;
+const debtPaid = d => rd(d.payments.reduce((a, p) => a + p.amount, 0));
+const debtLeft = d => Math.max(0, rd(d.amount - debtPaid(d)));
+const debtTotal = dir => rd(S.debts.filter(d => d.dir === dir).reduce((a, d) => a + debtLeft(d), 0));
+const dayStr = t => { const d = new Date(t); return monthKey(d) + '-' + String(d.getDate()).padStart(2, '0'); };
+const dShort = t => new Date(t).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'});
+// Pagos de deudas marcados "suma al presupuesto" en el mes actual (cobros suman, pagos restan)
+const debtBudgetDelta = () => rd(S.debts.reduce((a, d) => a + d.payments.reduce((b, p) =>
+  b + (p.budget && monthKey(new Date(p.ts)) === S.month ? (d.dir === 'owed' ? p.amount : -p.amount) : 0), 0), 0));
+let debtTab = 'owed';
 const sharedOffset = () => Math.round(S.expenses.filter(e => e.shared).reduce((a, e) => a + half(e.amount), 0) * 100) / 100;
 const tricountDebt = () => Math.round((S.tricount.base - sharedOffset()) * 100) / 100;
 const availOf = c => c.budget + (c.roll || 0);
@@ -169,7 +190,9 @@ function render() {
   const varBudget = S.cats.reduce((a, c) => a + availOf(c), 0);
   const varSpent = S.cats.reduce((a, c) => a + spentOf(c.id), 0);
   const assigned = S.cats.reduce((a, c) => a + c.budget, 0);
-  const free = Math.round((S.income - fixedTotal - assigned) * 100) / 100;
+  const extra = debtBudgetDelta();
+  const incomeTotal = S.income + extra;
+  const free = Math.round((incomeTotal - fixedTotal - assigned) * 100) / 100;
   const left = varBudget - varSpent;
   const pct = varBudget > 0 ? Math.min(100, varSpent / varBudget * 100) : 0;
 
@@ -180,7 +203,7 @@ function render() {
     <div class="row"><span>Gastado ${fmt(varSpent)}</span><span>de ${fmt(varBudget)}</span></div>
   </div>
   <div class="card">
-    <div class="fixed"><span>💰 Dinero del mes</span><b>${fmt(S.income)}</b></div>
+    <div class="fixed"><span>💰 Dinero del mes${extra ? ' <small style="color:var(--mut)">· incl. ' + sgn(extra) + ' de deudas</small>' : ''}</span><b>${fmt(incomeTotal)}</b></div>
     <div class="fixed"><span>🔒 Obligatorios pendientes</span><span>− ${fmt(fixedTotal)}</span></div>
     <div class="fixed"><span>💸 Variables asignadas</span><span>− ${fmt(assigned)}</span></div>
     <div class="fixed"><span>${free < 0 ? '⚠️ Te faltan' : '✅ Sin asignar'}</span><b style="color:${free < 0 ? 'var(--bad)' : 'var(--ok)'}">${fmt(Math.abs(free))}</b></div>
@@ -189,13 +212,13 @@ function render() {
   h += `<h2><span>Variables</span></h2>`;
   S.cats.forEach(c => {
     const sp = spentOf(c.id), av = availOf(c), p = pctOf(c), rest = av - sp;
-    const wins = winsOf(c.id), bal = Math.round((wins - sp) * 100) / 100;
+    const wins = winsOf(c.id), inn = rawInOf(c.id), bal = Math.round((wins - inn) * 100) / 100;
     h += `<div class="card cat" data-cat="${esc(c.id)}">
       <div class="top"><span class="name">${esc(c.emoji)} ${esc(c.name)}</span>
       <span class="left" style="color:${colorOf(p)}">${rest < 0 ? '−' : ''}${fmt(Math.abs(rest))}</span></div>
       <div class="bar"><i style="width:${Math.min(100, p)}%;background:${colorOf(p)}"></i></div>
-      <div class="meta"><span>${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}</span><span>${Math.round(p)}%</span></div>
-      ${c.tracker && (sp || wins) ? `<div class="meta" style="margin-top:6px"><span>Metido ${fmt(sp)} · Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
+      <div class="meta"><span>${c.tracker ? 'Pérdida ' : ''}${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}</span><span>${Math.round(p)}%</span></div>
+      ${c.tracker && (inn || wins) ? `<div class="meta" style="margin-top:6px"><span>Metido ${fmt(inn)} · Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
     </div>`;
   });
 
@@ -212,6 +235,22 @@ function render() {
     h += S.reminders.map(r => `<div class="fixed"><span>${esc(r.emoji)} ${esc(r.name)}</span><span>${fmt(r.amount)}</span></div>`).join('');
     h += `</div>`;
   }
+
+  // ---- Deudas ----
+  const owedT = debtTotal('owed'), oweT = debtTotal('owe'), net = rd(owedT - oweT);
+  const dl = S.debts.filter(d => d.dir === debtTab).sort((a, b) => (debtLeft(a) > 0 ? 0 : 1) - (debtLeft(b) > 0 ? 0 : 1) || b.ts - a.ts);
+  h += `<h2><span>🤝 Deudas</span><span style="color:${net >= 0 ? 'var(--ok)' : 'var(--bad)'}">Saldo ${sgn(net)}</span></h2><div class="card">
+    <div class="meta" style="margin-bottom:10px"><span>Te deben ${fmt(owedT)}</span><span>Debes ${fmt(oweT)}</span></div>
+    <div class="chips" style="margin-bottom:8px">
+      <button class="chip ${debtTab === 'owed' ? 'on' : ''}" data-dtab="owed">👋 Me deben</button>
+      <button class="chip ${debtTab === 'owe' ? 'on' : ''}" data-dtab="owe">💳 Debo</button>
+    </div>
+    <div class="fixed"><b>${debtTab === 'owed' ? 'Total pendiente de cobro' : 'Total pendiente de pagar'}</b><b>${fmt(debtTab === 'owed' ? owedT : oweT)}</b></div>`;
+  h += dl.map(d => {
+    const left = debtLeft(d), done = left <= 0, paid = debtPaid(d);
+    return `<div class="exp" data-debt="${esc(d.id)}" style="cursor:pointer;${done ? 'opacity:.55' : ''}"><div><span>${done ? '✅ ' : ''}${esc(d.person)}</span><small>${esc(d.concept || 'Sin concepto')} · ${dShort(d.ts)}${paid > 0 && !done ? ' · ' + (d.dir === 'owed' ? 'cobrado ' : 'pagado ') + fmt(paid) : ''}</small></div><div style="text-align:right"><b style="${done ? 'text-decoration:line-through' : ''}">${fmt(done ? d.amount : left)}</b>${!done && paid > 0 ? `<small>de ${fmt(d.amount)}</small>` : ''}</div></div>`;
+  }).join('') || '<div class="empty">Nada por aquí</div>';
+  h += `<button class="btn sec" data-adddebt="1">➕ Añadir deuda</button></div>`;
 
   document.getElementById('app').innerHTML = h;
 }
@@ -278,6 +317,7 @@ function addSheet(preCat, preKind) {
     if (!sel || !(amount > 0)) { o.querySelector('#amt').focus(); return; }
     const cat = S.cats.find(c => c.id === sel);
     const isOut = !!cat.tracker && kind === 'out';
+    if (cat.tracker && !isOut && invBlocked(cat)) return toast(`⛔ ${cat.name}: has llegado al límite de pérdida (${fmt(availOf(cat))}). Registra ganancias para seguir.`, 'var(--bad)');
     const shared = !cat.tracker && o.querySelector('#sh').checked;
     const before = pctOf(cat);
     const exp = {id: uid(), cat: sel, amount: Math.round(amount * 100) / 100, note: o.querySelector('#note').value.trim(), ts: Date.now()};
@@ -286,9 +326,10 @@ function addSheet(preCat, preKind) {
     S.expenses.push(exp);
     save(); closeSheet(); render();
     if (isOut) {
-      const bal = Math.round((winsOf(cat.id) - spentOf(cat.id)) * 100) / 100;
+      const bal = Math.round((winsOf(cat.id) - rawInOf(cat.id)) * 100) / 100;
       return toast(`🏆 ${cat.name}: +${fmt(exp.amount)}. Balance del mes ${sgn(bal)}`, 'var(--ok)');
     }
+    if (cat.tracker && invBlocked(cat)) return toast(`🔴 ${cat.name}: límite de pérdida alcanzado, no puedes meter más`, 'var(--bad)');
     const after = pctOf(cat);
     const rest = availOf(cat) - spentOf(cat.id);
     const extra = shared ? ` · Tricount −${fmt(half(exp.amount))}` : '';
@@ -300,25 +341,140 @@ function addSheet(preCat, preKind) {
   setTimeout(() => o.querySelector('#amt').focus(), 150);
 }
 
+function editExpense(expId, catId) {
+  const c = S.cats.find(x => x.id === catId); if (!c) return;
+  const exp = S.expenses.find(e => e.id === expId); if (!exp) return;
+  const out = exp.kind === 'out';
+  const o = openSheet(`<h3>${out ? '🏆 Editar ganancia' : (c.tracker ? '💸 Editar inversión' : '📝 Editar gasto')} <button class="icon-btn" id="x">✕</button></h3>
+    <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)" value="${exp.amount}">
+    <input type="text" id="note" placeholder="Nombre / nota (opcional)" value="${esc(exp.note || '')}">
+    <button class="btn" id="ok">Guardar cambios</button>
+    <button class="btn danger" id="del" style="margin-top:12px">🗑️ Borrar este ${out ? 'movimiento' : (c.tracker ? 'inversión' : 'gasto')}</button>`);
+  o.querySelector('#x').onclick = closeSheet;
+  o.querySelector('#ok').onclick = () => {
+    const newAmount = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+    if (!(newAmount > 0)) { o.querySelector('#amt').focus(); return; }
+    exp.amount = Math.round(newAmount * 100) / 100;
+    exp.note = o.querySelector('#note').value.trim();
+    save(); closeSheet(); render(); catSheet(catId);
+    toast(`✅ ${c.name}: cambios guardados`, 'var(--ok)');
+  };
+  o.querySelector('#del').onclick = () => {
+    if (!confirm('¿Borrar este movimiento?')) return;
+    S.expenses = S.expenses.filter(e => e.id !== expId);
+    save(); render(); catSheet(catId);
+  };
+  setTimeout(() => o.querySelector('#amt').focus(), 150);
+}
+
 function catSheet(id) {
   const c = S.cats.find(x => x.id === id); if (!c) return;
   const list = S.expenses.filter(e => e.cat === id).sort((a, b) => b.ts - a.ts);
-  const wins = winsOf(id), sp = spentOf(id), bal = Math.round((wins - sp) * 100) / 100;
+  const wins = winsOf(id), sp = spentOf(id), inn = rawInOf(id), bal = Math.round((wins - inn) * 100) / 100;
   const o = openSheet(`<h3>${esc(c.emoji)} ${esc(c.name)} <button class="icon-btn" id="x">✕</button></h3>
-    <div class="meta" style="margin-bottom:${c.tracker ? 4 : 8}px"><span>${c.tracker ? 'Metido' : 'Gastado'} ${fmt(sp)}</span><span>Quedan ${fmt(availOf(c) - sp)}</span></div>
+    <div class="meta" style="margin-bottom:${c.tracker ? 4 : 8}px"><span>${c.tracker ? 'Metido ' + fmt(inn) + ' · Pérdida' : 'Gastado'} ${fmt(sp)}</span><span>Quedan ${fmt(availOf(c) - sp)}</span></div>
     ${c.tracker ? `<div class="meta" style="margin-bottom:8px"><span>Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
-    ${list.length ? list.map(e => { const out = e.kind === 'out'; return `<div class="exp"><div><span style="color:${out ? 'var(--ok)' : 'inherit'}">${out ? '+' : ''}${fmt(e.amount)}${out ? ' ganado' : (c.tracker ? ' metido' : '')}</span>${e.shared ? ' 👥' : ''}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}${e.shared ? ' · Tricount −' + fmt(half(e.amount)) : ''}</small></div><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div>`; }).join('') : '<div class="empty">Aún no hay movimientos este mes</div>'}
-    ${c.tracker ? `<button class="btn" id="addIn">💸 Meto dinero</button><button class="btn sec" id="addOut">🏆 Gano / retiro</button>` : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
+    ${list.length ? list.map(e => { const out = e.kind === 'out'; return `<div class="exp"><div><span style="color:${out ? 'var(--ok)' : 'inherit'}">${out ? '+' : ''}${fmt(e.amount)}${out ? ' ganado' : (c.tracker ? ' metido' : '')}</span>${e.shared ? ' 👥' : ''}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}${e.shared ? ' · Tricount −' + fmt(half(e.amount)) : ''}</small></div><div><button data-edit="${esc(e.id)}" aria-label="Editar" style="background:none;border:0;color:var(--txt);padding:6px;font-size:18px">✏️</button><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div></div>`; }).join('') : '<div class="empty">Aún no hay movimientos este mes</div>'}
+    ${c.tracker ? (invBlocked(c) ? `<div style="color:var(--bad);padding:10px;text-align:center;font-weight:600;border-radius:12px;background:var(--card2);margin-top:12px">⛔ Límite de pérdida alcanzado (${fmt(availOf(c))}). Registra ganancias para seguir invirtiendo</div><button class="btn sec" id="addOut">🏆 Gano / retiro</button>` : `<button class="btn" id="addIn">💸 Meto dinero</button><button class="btn sec" id="addOut">🏆 Gano / retiro</button>`) : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
   o.querySelector('#x').onclick = closeSheet;
   if (c.tracker) {
-    o.querySelector('#addIn').onclick = () => addSheet(id, 'in');
+    const addInBtn = o.querySelector('#addIn');
+    if (addInBtn) addInBtn.onclick = () => addSheet(id, 'in');
     o.querySelector('#addOut').onclick = () => addSheet(id, 'out');
   } else o.querySelector('#add').onclick = () => addSheet(id);
+  o.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editExpense(b.dataset.edit, id));
   o.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     if (!confirm('¿Borrar este movimiento?')) return;
     S.expenses = S.expenses.filter(e => e.id !== b.dataset.del);
     save(); render(); catSheet(id);
   });
+}
+
+// ---------- Deudas ----------
+function debtForm(id, dirPre) {
+  const d = id ? S.debts.find(x => x.id === id) : null;
+  let dir = d ? d.dir : (dirPre || 'owed');
+  const o = openSheet(`<h3>${d ? 'Editar deuda' : 'Nueva deuda'} <button class="icon-btn" id="x">✕</button></h3>
+    <div class="chips"><button class="chip" data-dir="owed">👋 Me deben</button><button class="chip" data-dir="owe">💳 Debo</button></div>
+    <input type="text" id="person" placeholder="Persona" value="${esc(d ? d.person : '')}">
+    <input type="text" id="concept" placeholder="Concepto (opcional)" value="${esc(d ? d.concept : '')}">
+    <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)" value="${d ? d.amount : ''}">
+    <input type="date" id="dd" value="${dayStr(d ? d.ts : Date.now())}">
+    <button class="btn" id="ok">Guardar</button>`);
+  const refresh = () => o.querySelectorAll('[data-dir]').forEach(b => b.classList.toggle('on', b.dataset.dir === dir));
+  o.querySelectorAll('[data-dir]').forEach(b => b.onclick = () => { dir = b.dataset.dir; refresh(); });
+  refresh();
+  o.querySelector('#x').onclick = closeSheet;
+  o.querySelector('#ok').onclick = () => {
+    const person = o.querySelector('#person').value.trim();
+    const amount = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+    if (!person) return o.querySelector('#person').focus();
+    if (!(amount > 0)) return o.querySelector('#amt').focus();
+    const dv = o.querySelector('#dd').value;
+    const ts = dv ? new Date(dv + 'T12:00:00').getTime() : Date.now();
+    const concept = o.querySelector('#concept').value.trim();
+    if (d) Object.assign(d, {dir, person, concept, amount: rd(amount), ts});
+    else S.debts.push({id: uid(), dir, person, concept, amount: rd(amount), ts, payments: []});
+    debtTab = dir;
+    save(); closeSheet(); render();
+    if (d) debtSheet(d.id); else toast('✅ Deuda guardada', 'var(--ok)');
+  };
+  setTimeout(() => o.querySelector('#person').focus(), 150);
+}
+
+function debtSheet(id) {
+  const d = S.debts.find(x => x.id === id); if (!d) return;
+  const owed = d.dir === 'owed', left = debtLeft(d), paid = debtPaid(d);
+  const pays = d.payments.slice().sort((a, b) => b.ts - a.ts);
+  const o = openSheet(`<h3>${owed ? '👋' : '💳'} ${esc(d.person)} <button class="icon-btn" id="x">✕</button></h3>
+    <div class="meta" style="margin-bottom:4px"><span>${esc(d.concept || 'Sin concepto')} · ${dShort(d.ts)}</span><span>Total ${fmt(d.amount)}</span></div>
+    <div class="meta" style="margin-bottom:8px"><span>${owed ? 'Cobrado' : 'Pagado'} ${fmt(paid)}</span><b style="color:${left > 0 ? 'var(--warn)' : 'var(--ok)'}">${left > 0 ? 'Pendiente ' + fmt(left) : '✅ Saldada'}</b></div>
+    ${pays.map(p => `<div class="exp"><div><span>${fmt(p.amount)}</span><small>${dShort(p.ts)} · ${p.budget ? (owed ? 'suma al presupuesto' : 'cuenta como gasto') : 'aparte del presupuesto'}</small></div><button data-delp="${esc(p.id)}" aria-label="Borrar pago">🗑️</button></div>`).join('') || '<div class="empty">Sin pagos todavía</div>'}
+    ${left > 0 ? `<button class="btn" id="pay">${owed ? '💰 Registrar cobro / saldar' : '💸 Registrar pago / saldar'}</button>` : ''}
+    <button class="btn sec" id="edit">✏️ Editar deuda</button>
+    <button class="btn danger" id="del" style="margin-top:8px">🗑️ Eliminar deuda</button>`);
+  o.querySelector('#x').onclick = closeSheet;
+  if (left > 0) o.querySelector('#pay').onclick = () => paySheet(id);
+  o.querySelector('#edit').onclick = () => debtForm(id);
+  o.querySelector('#del').onclick = () => {
+    if (!confirm('¿Eliminar esta deuda y sus pagos?')) return;
+    S.debts = S.debts.filter(x => x.id !== id);
+    save(); closeSheet(); render();
+  };
+  o.querySelectorAll('[data-delp]').forEach(b => b.onclick = () => {
+    if (!confirm('¿Borrar este pago?')) return;
+    d.payments = d.payments.filter(p => p.id !== b.dataset.delp);
+    save(); render(); debtSheet(id);
+  });
+}
+
+function paySheet(id) {
+  const d = S.debts.find(x => x.id === id); if (!d) return;
+  const owed = d.dir === 'owed', left = debtLeft(d);
+  const o = openSheet(`<h3>${owed ? 'Registrar cobro' : 'Registrar pago'} <button class="icon-btn" id="x">✕</button></h3>
+    <div class="meta" style="margin-bottom:8px"><span>${esc(d.person)}</span><span>Pendiente ${fmt(left)}</span></div>
+    <input type="number" id="amt" inputmode="decimal" step="0.01" value="${left}">
+    <label class="share"><input type="checkbox" id="bud"><span>${owed ? '➕ Sumar al presupuesto del mes' : '➖ Contar como gasto del mes'}<small id="info"></small></span></label>
+    <button class="btn" id="ok">Guardar</button>`);
+  const amtOf = () => parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+  const refresh = () => {
+    const a = amtOf() > 0 ? amtOf() : 0, on = o.querySelector('#bud').checked;
+    o.querySelector('#info').textContent = !on ? 'Queda aparte: no cambia tu presupuesto'
+      : (owed ? 'Tu dinero del mes subirá ' : 'Tu dinero del mes bajará ') + fmt(a);
+  };
+  o.querySelector('#bud').onchange = refresh;
+  o.querySelector('#amt').oninput = refresh;
+  refresh();
+  o.querySelector('#x').onclick = () => debtSheet(id);
+  o.querySelector('#ok').onclick = () => {
+    const a = amtOf();
+    if (!(a > 0)) return o.querySelector('#amt').focus();
+    if (a > left + 0.005) return toast(`Máximo pendiente: ${fmt(left)}`, 'var(--warn)');
+    d.payments.push({id: uid(), amount: rd(a), ts: Date.now(), budget: o.querySelector('#bud').checked});
+    save(); render(); debtSheet(id);
+    toast(debtLeft(d) <= 0 ? '✅ Deuda saldada' : `✅ Pago guardado. Pendiente ${fmt(debtLeft(d))}`, 'var(--ok)');
+  };
+  setTimeout(() => o.querySelector('#amt').select(), 150);
 }
 
 function settingsSheet() {
@@ -389,6 +545,9 @@ function settingsSheet() {
 document.getElementById('btnAdd').onclick = () => addSheet();
 document.getElementById('btnSettings').onclick = settingsSheet;
 document.getElementById('app').addEventListener('click', e => {
+  const dt = e.target.closest('[data-dtab]'); if (dt) { debtTab = dt.dataset.dtab; return render(); }
+  if (e.target.closest('[data-adddebt]')) return debtForm(null, debtTab);
+  const db = e.target.closest('[data-debt]'); if (db) return debtSheet(db.dataset.debt);
   const c = e.target.closest('[data-cat]'); if (c) return catSheet(c.dataset.cat);
   const f = e.target.closest('[data-fix]');
   if (f) { const x = S.fixed.find(y => y.id === f.dataset.fix); if (x) { x.paid = !x.paid; save(); render(); } }
