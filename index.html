@@ -21,6 +21,11 @@ h1{font-size:20px;margin:0}
 h2{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;margin:18px 2px 8px;display:flex;justify-content:space-between}
 .card{background:var(--card);border-radius:16px;padding:14px;margin-bottom:10px}
 .cat{cursor:pointer}
+.qrow{display:flex;gap:8px;margin-top:10px}
+.qrow input{flex:1.1;min-width:0;margin:0!important;padding:11px!important;font-size:17px!important}
+.qb{flex:1;border:0;border-radius:12px;padding:11px 6px;font-size:15px;font-weight:700;color:#0f172a}
+.qb.win{background:var(--ok)}
+.qb.loss{background:var(--bad)}
 .cat .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .cat .name{font-weight:600}
 .cat .left{font-weight:700}
@@ -218,7 +223,8 @@ function render() {
       <span class="left" style="color:${colorOf(p)}">${rest < 0 ? '−' : ''}${fmt(Math.abs(rest))}</span></div>
       <div class="bar"><i style="width:${Math.min(100, p)}%;background:${colorOf(p)}"></i></div>
       <div class="meta"><span>${c.tracker ? 'Pérdida ' : ''}${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}</span><span>${Math.round(p)}%</span></div>
-      ${c.tracker && (inn || wins) ? `<div class="meta" style="margin-top:6px"><span>Metido ${fmt(inn)} · Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
+      ${c.tracker && (inn || wins) ? `<div class="meta" style="margin-top:6px"><span>Perdido ${fmt(inn)} · Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
+      ${c.tracker ? `<div class="qrow" data-q="${esc(c.id)}"><input type="number" class="qamt" inputmode="decimal" step="0.01" placeholder="€"><button class="qb win" data-qk="out">🏆 Ganado</button><button class="qb loss" data-qk="in">💸 Perdido</button></div>` : ''}
     </div>`;
   });
 
@@ -281,8 +287,8 @@ function addSheet(preCat, preKind) {
   const o = openSheet(`<h3>Añadir gasto <button class="icon-btn" id="x">✕</button></h3>
     <div class="chips">${S.cats.map(c => `<button class="chip ${c.id === sel ? 'on' : ''}" data-id="${esc(c.id)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('')}</div>
     <div class="chips" id="kindRow" style="display:none">
-      <button class="chip" data-kind="in">💸 Meto</button>
-      <button class="chip" data-kind="out">🏆 Gano</button>
+      <button class="chip" data-kind="in">💸 Perdido</button>
+      <button class="chip" data-kind="out">🏆 Ganado</button>
     </div>
     <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)">
     <input type="text" id="note" placeholder="Nota (opcional)">
@@ -295,8 +301,8 @@ function addSheet(preCat, preKind) {
     o.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === kind));
     o.querySelector('#shRow').style.display = tr ? 'none' : 'flex';
     const out = tr && kind === 'out';
-    o.querySelector('#amt').placeholder = out ? 'Importe ganado / retirado (€)' : 'Importe (€)';
-    o.querySelector('#ok').textContent = out ? 'Guardar ganancia' : (tr ? 'Guardar lo que meto' : 'Guardar gasto');
+    o.querySelector('#amt').placeholder = out ? 'Importe ganado (€)' : 'Importe (€)';
+    o.querySelector('#ok').textContent = out ? 'Guardar ganancia' : (tr ? 'Guardar pérdida' : 'Guardar gasto');
     const a = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
     o.querySelector('#shInfo').textContent = o.querySelector('#sh').checked && a > 0
       ? 'Se descontarán ' + fmt(half(a)) + ' del Tricount'
@@ -341,11 +347,27 @@ function addSheet(preCat, preKind) {
   setTimeout(() => o.querySelector('#amt').focus(), 150);
 }
 
+function quickInv(catId, kind, raw) {
+  const cat = S.cats.find(c => c.id === catId); if (!cat) return;
+  const amount = parseFloat(String(raw).replace(',', '.'));
+  if (!(amount > 0)) { toast('Escribe un importe', 'var(--warn)'); return; }
+  if (kind === 'in' && invBlocked(cat)) return toast(`⛔ ${cat.name}: límite de pérdida alcanzado (${fmt(availOf(cat))})`, 'var(--bad)');
+  const exp = {id: uid(), cat: catId, amount: Math.round(amount * 100) / 100, note: '', ts: Date.now()};
+  if (kind === 'out') exp.kind = 'out';
+  S.expenses.push(exp);
+  save(); render();
+  const bal = Math.round((winsOf(catId) - rawInOf(catId)) * 100) / 100;
+  if (kind === 'out') return toast(`🏆 +${fmt(exp.amount)} · Balance del mes ${sgn(bal)}`, 'var(--ok)');
+  const rest = availOf(cat) - spentOf(catId);
+  if (invBlocked(cat)) return toast(`🔴 −${fmt(exp.amount)} · límite de pérdida alcanzado`, 'var(--bad)');
+  toast(`💸 −${fmt(exp.amount)} · Balance ${sgn(bal)} · quedan ${fmt(rest)}`, 'var(--warn)');
+}
+
 function editExpense(expId, catId) {
   const c = S.cats.find(x => x.id === catId); if (!c) return;
   const exp = S.expenses.find(e => e.id === expId); if (!exp) return;
   const out = exp.kind === 'out';
-  const o = openSheet(`<h3>${out ? '🏆 Editar ganancia' : (c.tracker ? '💸 Editar inversión' : '📝 Editar gasto')} <button class="icon-btn" id="x">✕</button></h3>
+  const o = openSheet(`<h3>${out ? '🏆 Editar ganancia' : (c.tracker ? '💸 Editar pérdida' : '📝 Editar gasto')} <button class="icon-btn" id="x">✕</button></h3>
     <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)" value="${exp.amount}">
     <input type="text" id="note" placeholder="Nombre / nota (opcional)" value="${esc(exp.note || '')}">
     <button class="btn" id="ok">Guardar cambios</button>
@@ -372,10 +394,10 @@ function catSheet(id) {
   const list = S.expenses.filter(e => e.cat === id).sort((a, b) => b.ts - a.ts);
   const wins = winsOf(id), sp = spentOf(id), inn = rawInOf(id), bal = Math.round((wins - inn) * 100) / 100;
   const o = openSheet(`<h3>${esc(c.emoji)} ${esc(c.name)} <button class="icon-btn" id="x">✕</button></h3>
-    <div class="meta" style="margin-bottom:${c.tracker ? 4 : 8}px"><span>${c.tracker ? 'Metido ' + fmt(inn) + ' · Pérdida' : 'Gastado'} ${fmt(sp)}</span><span>Quedan ${fmt(availOf(c) - sp)}</span></div>
+    <div class="meta" style="margin-bottom:${c.tracker ? 4 : 8}px"><span>${c.tracker ? 'Perdido ' + fmt(inn) + ' · Pérdida neta' : 'Gastado'} ${fmt(sp)}</span><span>Quedan ${fmt(availOf(c) - sp)}</span></div>
     ${c.tracker ? `<div class="meta" style="margin-bottom:8px"><span>Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
-    ${list.length ? list.map(e => { const out = e.kind === 'out'; return `<div class="exp"><div><span style="color:${out ? 'var(--ok)' : 'inherit'}">${out ? '+' : ''}${fmt(e.amount)}${out ? ' ganado' : (c.tracker ? ' metido' : '')}</span>${e.shared ? ' 👥' : ''}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}${e.shared ? ' · Tricount −' + fmt(half(e.amount)) : ''}</small></div><div><button data-edit="${esc(e.id)}" aria-label="Editar" style="background:none;border:0;color:var(--txt);padding:6px;font-size:18px">✏️</button><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div></div>`; }).join('') : '<div class="empty">Aún no hay movimientos este mes</div>'}
-    ${c.tracker ? (invBlocked(c) ? `<div style="color:var(--bad);padding:10px;text-align:center;font-weight:600;border-radius:12px;background:var(--card2);margin-top:12px">⛔ Límite de pérdida alcanzado (${fmt(availOf(c))}). Registra ganancias para seguir invirtiendo</div><button class="btn sec" id="addOut">🏆 Gano / retiro</button>` : `<button class="btn" id="addIn">💸 Meto dinero</button><button class="btn sec" id="addOut">🏆 Gano / retiro</button>`) : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
+    ${list.length ? list.map(e => { const out = e.kind === 'out'; return `<div class="exp"><div><span style="color:${out ? 'var(--ok)' : 'inherit'}">${out ? '+' : ''}${fmt(e.amount)}${out ? ' ganado' : (c.tracker ? ' perdido' : '')}</span>${e.shared ? ' 👥' : ''}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}${e.shared ? ' · Tricount −' + fmt(half(e.amount)) : ''}</small></div><div><button data-edit="${esc(e.id)}" aria-label="Editar" style="background:none;border:0;color:var(--txt);padding:6px;font-size:18px">✏️</button><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div></div>`; }).join('') : '<div class="empty">Aún no hay movimientos este mes</div>'}
+    ${c.tracker ? (invBlocked(c) ? `<div style="color:var(--bad);padding:10px;text-align:center;font-weight:600;border-radius:12px;background:var(--card2);margin-top:12px">⛔ Límite de pérdida alcanzado (${fmt(availOf(c))}). Registra ganancias para seguir invirtiendo</div><button class="btn sec" id="addOut">🏆 Ganado</button>` : `<button class="btn" id="addIn">💸 Perdido</button><button class="btn sec" id="addOut">🏆 Ganado</button>`) : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
   o.querySelector('#x').onclick = closeSheet;
   if (c.tracker) {
     const addInBtn = o.querySelector('#addIn');
@@ -545,6 +567,9 @@ function settingsSheet() {
 document.getElementById('btnAdd').onclick = () => addSheet();
 document.getElementById('btnSettings').onclick = settingsSheet;
 document.getElementById('app').addEventListener('click', e => {
+  const qb = e.target.closest('[data-qk]');
+  if (qb) { const row = qb.closest('[data-q]'); return quickInv(row.dataset.q, qb.dataset.qk, row.querySelector('.qamt').value); }
+  if (e.target.closest('.qrow')) return;
   const dt = e.target.closest('[data-dtab]'); if (dt) { debtTab = dt.dataset.dtab; return render(); }
   if (e.target.closest('[data-adddebt]')) return debtForm(null, debtTab);
   const db = e.target.closest('[data-debt]'); if (db) return debtSheet(db.dataset.debt);
