@@ -21,11 +21,12 @@ h1{font-size:20px;margin:0}
 h2{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;margin:18px 2px 8px;display:flex;justify-content:space-between}
 .card{background:var(--card);border-radius:16px;padding:14px;margin-bottom:10px}
 .cat{cursor:pointer}
-.qrow{display:flex;gap:8px;margin-top:10px}
-.qrow input{flex:1.1;min-width:0;margin:0!important;padding:11px!important;font-size:17px!important}
-.qb{flex:1;border:0;border-radius:12px;padding:11px 6px;font-size:15px;font-weight:700;color:#0f172a}
+.qrow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.qrow input{grid-column:1/-1;min-width:0;margin:0!important;padding:11px!important;font-size:17px!important}
+.qb{border:0;border-radius:12px;padding:11px 2px;font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap}
 .qb.win{background:var(--ok)}
 .qb.loss{background:var(--bad)}
+.qb.pend{background:var(--warn)}
 .cat .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .cat .name{font-weight:600}
 .cat .left{font-weight:700}
@@ -131,6 +132,8 @@ function normalize() {
     }
   }
   if (!Array.isArray(S.debts)) S.debts = [];
+  if (S.invTotal === undefined) S.invTotal = null;
+  if (!Array.isArray(S.pend)) S.pend = [];
   S.debts.forEach(d => { if (!Array.isArray(d.payments)) d.payments = []; });
   const inv = S.cats.find(c => c.id === 'inversion');
   if (inv && inv.tracker == null) inv.tracker = true;
@@ -165,12 +168,15 @@ const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt(Math.abs(n));
 const rawInOf = id => S.expenses.filter(e => e.cat === id && e.kind !== 'out').reduce((a, e) => a + e.amount, 0);
 const winsOf = id => S.expenses.filter(e => e.cat === id && e.kind === 'out').reduce((a, e) => a + e.amount, 0);
 // Gasto de una categoría. En las de juego/inversión solo cuenta la pérdida neta (metido − ganado, mínimo 0)
+// Pendientes (apuestas sin resolver): cuentan como dinero en juego solo si son de este mes
+const pendAllOf = id => S.pend.filter(p => p.cat === id).reduce((a, p) => a + p.amount, 0);
+const pendOf = id => S.pend.filter(p => p.cat === id && monthKey(new Date(p.ts)) === S.month).reduce((a, p) => a + p.amount, 0);
 const spentOf = id => {
   const c = S.cats.find(x => x.id === id), r = rawInOf(id);
-  return c && c.tracker ? Math.max(0, Math.round((r - winsOf(id)) * 100) / 100) : r;
+  return c && c.tracker ? Math.max(0, Math.round((r - winsOf(id) + pendOf(id)) * 100) / 100) : r;
 };
-// Bloqueo: pérdida neta ha llegado al límite de la categoría
-const invBlocked = c => !!c.tracker && spentOf(c.id) >= availOf(c) - 0.005;
+// Aviso (no bloqueo): la pérdida neta ha superado el límite de la categoría
+const overLimit = c => !!c.tracker && spentOf(c.id) > availOf(c) + 0.005;
 // Deudas
 const rd = n => Math.round(n * 100) / 100;
 const debtPaid = d => rd(d.payments.reduce((a, p) => a + p.amount, 0));
@@ -222,9 +228,11 @@ function render() {
       <div class="top"><span class="name">${esc(c.emoji)} ${esc(c.name)}</span>
       <span class="left" style="color:${colorOf(p)}">${rest < 0 ? '−' : ''}${fmt(Math.abs(rest))}</span></div>
       <div class="bar"><i style="width:${Math.min(100, p)}%;background:${colorOf(p)}"></i></div>
-      <div class="meta"><span>${c.tracker ? 'Pérdida ' : ''}${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}</span><span>${Math.round(p)}%</span></div>
+      <div class="meta"><span>${c.tracker ? 'Pérdida ' : ''}${fmt(sp)} de ${fmt(av)}${c.roll ? ' (incl. ' + fmt(c.roll) + ' arrastrado)' : ''}${overLimit(c) ? ' · ⚠️ pasado' : ''}</span><span>${Math.round(p)}%</span></div>
       ${c.tracker && (inn || wins) ? `<div class="meta" style="margin-top:6px"><span>Perdido ${fmt(inn)} · Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
-      ${c.tracker ? `<div class="qrow" data-q="${esc(c.id)}"><input type="number" class="qamt" inputmode="decimal" step="0.01" placeholder="€"><button class="qb win" data-qk="out">🏆 Ganado</button><button class="qb loss" data-qk="in">💸 Perdido</button></div>` : ''}
+      ${c.tracker && pendAllOf(c.id) ? `<div class="meta" style="margin-top:6px"><span>⏳ Pendiente ${fmt(pendAllOf(c.id))}</span><span style="color:var(--mut)">${pendOf(c.id) === pendAllOf(c.id) ? 'cuenta en la pérdida' : pendOf(c.id) ? 'cuenta ' + fmt(pendOf(c.id)) : 'de meses anteriores'}</span></div>` : ''}
+      ${c.tracker && S.invTotal ? invHomeLine() : ''}
+      ${c.tracker ? `<div class="qrow" data-q="${esc(c.id)}"><input type="number" class="qamt" inputmode="decimal" step="0.01" placeholder="€"><button class="qb win" data-qk="out">🏆 Ganado</button><button class="qb loss" data-qk="in">💸 Perdido</button><button class="qb pend" data-qk="pend">⏳ Pendiente</button></div>` : ''}
     </div>`;
   });
 
@@ -289,6 +297,7 @@ function addSheet(preCat, preKind) {
     <div class="chips" id="kindRow" style="display:none">
       <button class="chip" data-kind="in">💸 Perdido</button>
       <button class="chip" data-kind="out">🏆 Ganado</button>
+      <button class="chip" data-kind="pend">⏳ Pendiente</button>
     </div>
     <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe (€)">
     <input type="text" id="note" placeholder="Nota (opcional)">
@@ -300,9 +309,9 @@ function addSheet(preCat, preKind) {
     o.querySelector('#kindRow').style.display = tr ? 'flex' : 'none';
     o.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === kind));
     o.querySelector('#shRow').style.display = tr ? 'none' : 'flex';
-    const out = tr && kind === 'out';
-    o.querySelector('#amt').placeholder = out ? 'Importe ganado (€)' : 'Importe (€)';
-    o.querySelector('#ok').textContent = out ? 'Guardar ganancia' : (tr ? 'Guardar pérdida' : 'Guardar gasto');
+    const out = tr && kind === 'out', pd = tr && kind === 'pend';
+    o.querySelector('#amt').placeholder = out ? 'Importe ganado (€)' : pd ? 'Importe en juego (€)' : 'Importe (€)';
+    o.querySelector('#ok').textContent = out ? 'Guardar ganancia' : pd ? 'Guardar pendiente' : (tr ? 'Guardar pérdida' : 'Guardar gasto');
     const a = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
     o.querySelector('#shInfo').textContent = o.querySelector('#sh').checked && a > 0
       ? 'Se descontarán ' + fmt(half(a)) + ' del Tricount'
@@ -323,7 +332,11 @@ function addSheet(preCat, preKind) {
     if (!sel || !(amount > 0)) { o.querySelector('#amt').focus(); return; }
     const cat = S.cats.find(c => c.id === sel);
     const isOut = !!cat.tracker && kind === 'out';
-    if (cat.tracker && !isOut && invBlocked(cat)) return toast(`⛔ ${cat.name}: has llegado al límite de pérdida (${fmt(availOf(cat))}). Registra ganancias para seguir.`, 'var(--bad)');
+    if (cat.tracker && kind === 'pend') {
+      const pe = {id: uid(), cat: sel, amount: rd(amount), note: o.querySelector('#note').value.trim(), ts: Date.now()};
+      S.pend.push(pe); save(); closeSheet(); render();
+      return invLossToast(cat, `⏳ ${fmt(pe.amount)} pendiente`);
+    }
     const shared = !cat.tracker && o.querySelector('#sh').checked;
     const before = pctOf(cat);
     const exp = {id: uid(), cat: sel, amount: Math.round(amount * 100) / 100, note: o.querySelector('#note').value.trim(), ts: Date.now()};
@@ -335,7 +348,7 @@ function addSheet(preCat, preKind) {
       const bal = Math.round((winsOf(cat.id) - rawInOf(cat.id)) * 100) / 100;
       return toast(`🏆 ${cat.name}: +${fmt(exp.amount)}. Balance del mes ${sgn(bal)}`, 'var(--ok)');
     }
-    if (cat.tracker && invBlocked(cat)) return toast(`🔴 ${cat.name}: límite de pérdida alcanzado, no puedes meter más`, 'var(--bad)');
+    if (cat.tracker) return invLossToast(cat, `💸 −${fmt(exp.amount)}`);
     const after = pctOf(cat);
     const rest = availOf(cat) - spentOf(cat.id);
     const extra = shared ? ` · Tricount −${fmt(half(exp.amount))}` : '';
@@ -347,20 +360,163 @@ function addSheet(preCat, preKind) {
   setTimeout(() => o.querySelector('#amt').focus(), 150);
 }
 
+function invLossToast(cat, prefix) {
+  const sp = spentOf(cat.id), av = availOf(cat);
+  if (sp > av + 0.005) return toast(`🔴 ${prefix} · Te has pasado del límite: pérdida ${fmt(sp)} de ${fmt(av)}`, 'var(--bad)');
+  if (sp >= av - 0.005) return toast(`🟠 ${prefix} · Has llegado al límite de pérdida (${fmt(av)})`, 'var(--warn)');
+  toast(`${prefix} · Pérdida ${fmt(sp)} de ${fmt(av)} · quedan ${fmt(av - sp)}`, 'var(--warn)');
+}
+
 function quickInv(catId, kind, raw) {
   const cat = S.cats.find(c => c.id === catId); if (!cat) return;
   const amount = parseFloat(String(raw).replace(',', '.'));
   if (!(amount > 0)) { toast('Escribe un importe', 'var(--warn)'); return; }
-  if (kind === 'in' && invBlocked(cat)) return toast(`⛔ ${cat.name}: límite de pérdida alcanzado (${fmt(availOf(cat))})`, 'var(--bad)');
-  const exp = {id: uid(), cat: catId, amount: Math.round(amount * 100) / 100, note: '', ts: Date.now()};
+  const amt = rd(amount);
+  if (kind === 'pend') {
+    S.pend.push({id: uid(), cat: catId, amount: amt, note: '', ts: Date.now()});
+    save(); render();
+    return invLossToast(cat, `⏳ ${fmt(amt)} pendiente`);
+  }
+  const exp = {id: uid(), cat: catId, amount: amt, note: '', ts: Date.now()};
   if (kind === 'out') exp.kind = 'out';
   S.expenses.push(exp);
   save(); render();
-  const bal = Math.round((winsOf(catId) - rawInOf(catId)) * 100) / 100;
-  if (kind === 'out') return toast(`🏆 +${fmt(exp.amount)} · Balance del mes ${sgn(bal)}`, 'var(--ok)');
-  const rest = availOf(cat) - spentOf(catId);
-  if (invBlocked(cat)) return toast(`🔴 −${fmt(exp.amount)} · límite de pérdida alcanzado`, 'var(--bad)');
-  toast(`💸 −${fmt(exp.amount)} · Balance ${sgn(bal)} · quedan ${fmt(rest)}`, 'var(--warn)');
+  if (kind === 'out') return toast(`🏆 +${fmt(amt)} · Balance del mes ${sgn(rd(winsOf(catId) - rawInOf(catId)))}`, 'var(--ok)');
+  invLossToast(cat, `💸 −${fmt(amt)}`);
+}
+
+function pendListHTML(catId) {
+  const l = S.pend.filter(p => p.cat === catId).sort((a, b) => b.ts - a.ts);
+  if (!l.length) return '';
+  return `<div class="meta" style="margin-top:6px"><span>⏳ Pendientes de resolver</span></div>` + l.map(p => {
+    const old = monthKey(new Date(p.ts)) !== S.month;
+    return `<div class="exp"><div><span style="color:var(--warn)">⏳ ${fmt(p.amount)}</span><small>${dShort(p.ts)}${p.note ? ' · ' + esc(p.note) : ''}${old ? ' · mes anterior, no cuenta' : ' · cuenta en la pérdida'}</small></div><div><button data-res="${esc(p.id)}" style="background:var(--acc);border:0;color:#fff;border-radius:10px;padding:7px 10px;font-size:13px;font-weight:700">Resolver</button><button data-editpend="${esc(p.id)}" aria-label="Editar" style="background:none;border:0;color:var(--txt);padding:6px;font-size:18px">✏️</button><button data-delpend="${esc(p.id)}" aria-label="Borrar">🗑️</button></div></div>`;
+  }).join('');
+}
+
+function resolveSheet(pid, catId) {
+  const p = S.pend.find(x => x.id === pid); if (!p) return;
+  const c = S.cats.find(x => x.id === catId); if (!c) return;
+  let mode = 'profit';
+  const o = openSheet(`<h3>⏳ Resolver ${fmt(p.amount)} <button class="icon-btn" id="x">✕</button></h3>
+    ${p.note ? `<div class="meta" style="margin-bottom:8px"><span>${esc(p.note)}</span></div>` : ''}
+    <button class="btn danger" id="lost">💸 Perdida (−${fmt(p.amount)})</button>
+    <div class="meta" style="margin:16px 0 8px"><span>Si ha sido ganada:</span></div>
+    <div class="chips"><button class="chip" data-m="profit">Beneficio neto</button><button class="chip" data-m="total">Cobro total</button></div>
+    <input type="number" id="amt" inputmode="decimal" step="0.01">
+    <div class="meta" style="margin:-4px 2px 8px"><span id="info"></span></div>
+    <button class="btn" id="won" style="background:var(--ok);color:#0f172a">🏆 Ganada</button>
+    <button class="btn sec" id="void">↩️ Devuelta / anulada</button>`);
+  const val = () => parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+  const gain = () => { const v = val(); return isNaN(v) ? null : (mode === 'total' ? rd(v - p.amount) : rd(v)); };
+  const refresh = () => {
+    o.querySelectorAll('[data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === mode));
+    o.querySelector('#amt').placeholder = mode === 'total' ? 'Total cobrado (€)' : 'Beneficio (€)';
+    const g = gain();
+    o.querySelector('#info').textContent = g === null ? (mode === 'total' ? 'Se resta lo metido: ' + fmt(p.amount) : 'Lo que ganas de más, sin contar lo metido') : 'Resultado de esta apuesta: ' + sgn(g);
+  };
+  o.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m; refresh(); });
+  o.querySelector('#amt').oninput = refresh;
+  refresh();
+  const done = () => { S.pend = S.pend.filter(x => x.id !== pid); };
+  const addExp = (amount, out) => {
+    const e = {id: uid(), cat: catId, amount, note: p.note || '', ts: Date.now()};
+    if (out) e.kind = 'out';
+    S.expenses.push(e);
+  };
+  o.querySelector('#x').onclick = () => catSheet(catId);
+  o.querySelector('#lost').onclick = () => {
+    done(); addExp(p.amount, false); save(); render(); catSheet(catId);
+    invLossToast(c, `💸 −${fmt(p.amount)} perdida`);
+  };
+  o.querySelector('#won').onclick = () => {
+    const g = gain();
+    if (g === null || (mode === 'profit' && !(g > 0))) return o.querySelector('#amt').focus();
+    done();
+    if (g > 0) addExp(g, true); else if (g < 0) addExp(-g, false);
+    save(); render(); catSheet(catId);
+    if (g > 0) toast(`🏆 +${fmt(g)} · Balance del mes ${sgn(rd(winsOf(catId) - rawInOf(catId)))}`, 'var(--ok)');
+    else if (g < 0) invLossToast(c, `💸 −${fmt(-g)} (cobro menor que lo metido)`);
+    else toast('↩️ Cobro igual a lo metido: queda a cero', 'var(--ok)');
+  };
+  o.querySelector('#void').onclick = () => {
+    done(); save(); render(); catSheet(catId);
+    toast('↩️ Apuesta anulada: no cuenta', 'var(--ok)');
+  };
+}
+
+function editPend(pid, catId) {
+  const p = S.pend.find(x => x.id === pid); if (!p) return;
+  const o = openSheet(`<h3>⏳ Editar pendiente <button class="icon-btn" id="x">✕</button></h3>
+    <input type="number" id="amt" inputmode="decimal" step="0.01" value="${p.amount}">
+    <input type="text" id="note" placeholder="Nota (opcional)" value="${esc(p.note || '')}">
+    <button class="btn" id="ok">Guardar cambios</button>`);
+  o.querySelector('#x').onclick = () => catSheet(catId);
+  o.querySelector('#ok').onclick = () => {
+    const a = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+    if (!(a > 0)) return o.querySelector('#amt').focus();
+    p.amount = rd(a); p.note = o.querySelector('#note').value.trim();
+    save(); render(); catSheet(catId);
+  };
+}
+
+// ---------- Balance total de inversión (rango de fechas) ----------
+const fmtD = s => new Date(s + 'T12:00:00').toLocaleDateString('es-ES', {day: 'numeric', month: 'short', year: 'numeric'});
+const balCol = n => n >= 0 ? 'var(--ok)' : 'var(--bad)';
+function invTotalInfo() {
+  const t = S.invTotal; if (!t) return null;
+  const ids = S.cats.filter(c => c.tracker).map(c => c.id);
+  const lim = new Date(t.to + 'T23:59:59').getTime();
+  const after = rd(S.history.flatMap(h => h.expenses).concat(S.expenses)
+    .filter(e => ids.includes(e.cat) && e.ts > lim)
+    .reduce((a, e) => a + (e.kind === 'out' ? e.amount : -e.amount), 0));
+  return {after, total: rd(t.amount + after)};
+}
+function invHomeLine() {
+  const t = S.invTotal, i = invTotalInfo();
+  return `<div class="meta" style="margin-top:6px"><span>📊 Total desde ${fmtD(t.from)}</span><b style="color:${balCol(i.total)}">${sgn(i.total)}</b></div>`;
+}
+function invTotalHTML() {
+  const t = S.invTotal;
+  if (!t) return `<button class="btn sec" id="invTot" style="margin:6px 0 12px">📊 Añadir balance total (rango de fechas)</button>`;
+  const i = invTotalInfo();
+  return `<div style="background:var(--card2);border-radius:14px;padding:12px;margin:6px 0 12px">
+    <div class="meta"><span>📊 Balance total · ${fmtD(t.from)} – ${fmtD(t.to)}</span><button id="invTot" aria-label="Editar balance total" style="background:none;border:0;color:var(--txt);font-size:18px;padding:0 4px">✏️</button></div>
+    <div style="font-size:26px;font-weight:800;color:${balCol(t.amount)};margin:2px 0 6px">${sgn(t.amount)}</div>
+    <div class="meta"><span>Apuntado en la app después del ${fmtD(t.to)}</span><b style="color:${balCol(i.after)}">${sgn(i.after)}</b></div>
+    <div class="meta" style="margin-top:4px"><span>Total hasta hoy</span><b style="color:${balCol(i.total)}">${sgn(i.total)}</b></div>
+  </div>`;
+}
+function invTotalSheet(catId) {
+  const t = S.invTotal;
+  let sign = t && t.amount < 0 ? 'loss' : 'win';
+  const o = openSheet(`<h3>📊 Balance total <button class="icon-btn" id="x">✕</button></h3>
+    <div class="meta" style="margin-bottom:6px"><span>Desde</span></div>
+    <input type="date" id="from" value="${t ? t.from : new Date().getFullYear() + '-01-01'}">
+    <div class="meta" style="margin-bottom:6px"><span>Hasta</span></div>
+    <input type="date" id="to" value="${t ? t.to : dayStr(Date.now())}">
+    <div class="chips"><button class="chip" data-s="win">🏆 Ganado</button><button class="chip" data-s="loss">💸 Perdido</button></div>
+    <input type="number" id="amt" inputmode="decimal" step="0.01" placeholder="Importe total (€)" value="${t ? Math.abs(t.amount) : ''}">
+    <button class="btn" id="ok">Guardar</button>
+    ${t ? '<button class="btn danger" id="del" style="margin-top:12px">🗑️ Quitar balance total</button>' : ''}`);
+  const refresh = () => o.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('on', b.dataset.s === sign));
+  o.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { sign = b.dataset.s; refresh(); });
+  refresh();
+  o.querySelector('#x').onclick = () => catSheet(catId);
+  o.querySelector('#ok').onclick = () => {
+    const from = o.querySelector('#from').value, to = o.querySelector('#to').value;
+    const a = parseFloat(String(o.querySelector('#amt').value).replace(',', '.'));
+    if (!from || !to) return toast('Pon las dos fechas', 'var(--warn)');
+    if (from > to) return toast('La fecha "desde" es posterior a "hasta"', 'var(--warn)');
+    if (isNaN(a) || a < 0) return o.querySelector('#amt').focus();
+    S.invTotal = {from, to, amount: sign === 'loss' ? -rd(a) : rd(a)};
+    save(); render(); catSheet(catId);
+    toast('✅ Balance total guardado', 'var(--ok)');
+  };
+  if (t) o.querySelector('#del').onclick = () => {
+    if (!confirm('¿Quitar el balance total?')) return;
+    S.invTotal = null; save(); render(); catSheet(catId);
+  };
 }
 
 function editExpense(expId, catId) {
@@ -396,13 +552,23 @@ function catSheet(id) {
   const o = openSheet(`<h3>${esc(c.emoji)} ${esc(c.name)} <button class="icon-btn" id="x">✕</button></h3>
     <div class="meta" style="margin-bottom:${c.tracker ? 4 : 8}px"><span>${c.tracker ? 'Perdido ' + fmt(inn) + ' · Pérdida neta' : 'Gastado'} ${fmt(sp)}</span><span>Quedan ${fmt(availOf(c) - sp)}</span></div>
     ${c.tracker ? `<div class="meta" style="margin-bottom:8px"><span>Ganado ${fmt(wins)}</span><b style="color:${bal >= 0 ? 'var(--ok)' : 'var(--bad)'}">Balance ${sgn(bal)}</b></div>` : ''}
+    ${c.tracker ? invTotalHTML() : ''}
+    ${c.tracker ? pendListHTML(id) : ''}
     ${list.length ? list.map(e => { const out = e.kind === 'out'; return `<div class="exp"><div><span style="color:${out ? 'var(--ok)' : 'inherit'}">${out ? '+' : ''}${fmt(e.amount)}${out ? ' ganado' : (c.tracker ? ' perdido' : '')}</span>${e.shared ? ' 👥' : ''}<small>${new Date(e.ts).toLocaleDateString('es-ES', {day: 'numeric', month: 'short'})}${e.note ? ' · ' + esc(e.note) : ''}${e.shared ? ' · Tricount −' + fmt(half(e.amount)) : ''}</small></div><div><button data-edit="${esc(e.id)}" aria-label="Editar" style="background:none;border:0;color:var(--txt);padding:6px;font-size:18px">✏️</button><button data-del="${esc(e.id)}" aria-label="Borrar">🗑️</button></div></div>`; }).join('') : '<div class="empty">Aún no hay movimientos este mes</div>'}
-    ${c.tracker ? (invBlocked(c) ? `<div style="color:var(--bad);padding:10px;text-align:center;font-weight:600;border-radius:12px;background:var(--card2);margin-top:12px">⛔ Límite de pérdida alcanzado (${fmt(availOf(c))}). Registra ganancias para seguir invirtiendo</div><button class="btn sec" id="addOut">🏆 Ganado</button>` : `<button class="btn" id="addIn">💸 Perdido</button><button class="btn sec" id="addOut">🏆 Ganado</button>`) : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
+    ${c.tracker ? `${overLimit(c) ? `<div style="color:var(--bad);padding:10px;text-align:center;font-weight:600;border-radius:12px;background:var(--card2);margin-top:12px">⚠️ Te has pasado del límite: pérdida ${fmt(sp)} de ${fmt(availOf(c))} (${fmt(sp - availOf(c))} de más)</div>` : ''}<button class="btn" id="addIn">💸 Perdido</button><button class="btn sec" id="addOut">🏆 Ganado</button><button class="btn sec" id="addPend">⏳ Pendiente</button>` : `<button class="btn" id="add">➕ Añadir gasto aquí</button>`}`);
   o.querySelector('#x').onclick = closeSheet;
   if (c.tracker) {
-    const addInBtn = o.querySelector('#addIn');
-    if (addInBtn) addInBtn.onclick = () => addSheet(id, 'in');
+    o.querySelector('#invTot').onclick = () => invTotalSheet(id);
+    o.querySelector('#addIn').onclick = () => addSheet(id, 'in');
     o.querySelector('#addOut').onclick = () => addSheet(id, 'out');
+    o.querySelector('#addPend').onclick = () => addSheet(id, 'pend');
+    o.querySelectorAll('[data-res]').forEach(b => b.onclick = () => resolveSheet(b.dataset.res, id));
+    o.querySelectorAll('[data-editpend]').forEach(b => b.onclick = () => editPend(b.dataset.editpend, id));
+    o.querySelectorAll('[data-delpend]').forEach(b => b.onclick = () => {
+      if (!confirm('¿Borrar este pendiente?')) return;
+      S.pend = S.pend.filter(x => x.id !== b.dataset.delpend);
+      save(); render(); catSheet(id);
+    });
   } else o.querySelector('#add').onclick = () => addSheet(id);
   o.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editExpense(b.dataset.edit, id));
   o.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
